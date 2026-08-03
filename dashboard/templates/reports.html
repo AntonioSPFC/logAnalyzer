@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Relatórios - Call Analysis Dashboard{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h3>&#x1F4CB; Relat&oacute;rios de Curadoria</h3>
+    <a href="/reports/export" class="btn btn-outline-primary btn-sm" download="curation_reports.json">&#x1F4E5; Exportar JSON</a>
+</div>
+
+{% if reports %}
+<div class="table-responsive">
+    <table class="table table-hover">
+        <thead class="table-dark">
+            <tr>
+                <th>CallId</th>
+                <th>Relat&oacute;rio</th>
+                <th>Criado em</th>
+                <th>Modificado em</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for report in reports %}
+            <tr>
+                <td><code>{{ report.call_id }}</code></td>
+                <td>{{ report.report_text[:100] }}{% if report.report_text|length > 100 %}...{% endif %}</td>
+                <td><small>{{ report.created_at.strftime('%d/%m/%Y %H:%M') }}</small></td>
+                <td><small>{{ report.modified_at.strftime('%d/%m/%Y %H:%M') }}</small></td>
+                <td><a href="/analyze/{{ report.call_id }}" class="btn btn-sm btn-outline-primary">Ver</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="alert alert-info">
+    Nenhum relat&oacute;rio de curadoria salvo ainda. Busque uma chamada e escreva seu relat&oacute;rio.
+</div>
+{% endif %}
+{% endblock %}

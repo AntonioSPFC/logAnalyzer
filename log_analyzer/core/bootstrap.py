@@ -6,10 +6,6 @@ antes da primeira análise (Req 6.1, 6.2, 6.3, 6.4, 6.5).
 """
 
 from log_analyzer.core.registro import Registro_de_Aplicacoes
-from log_analyzer.apps.vpl import VplParser
-from log_analyzer.apps.ork import OrkParser
-from log_analyzer.apps.voci import VociParser
-from log_analyzer.apps.padroes import VplPadrao, OrkPadrao, VociPadrao
 
 
 def criar_registro_padrao() -> Registro_de_Aplicacoes:
@@ -22,6 +18,13 @@ def criar_registro_padrao() -> Registro_de_Aplicacoes:
         Registro_de_Aplicacoes com exatamente 3 Aplicações registradas:
         VPL, ORK e VOCI.
     """
+    # Lazy imports to avoid circular dependency:
+    # core.__init__ -> bootstrap -> apps.vpl -> core.interfaces -> core.__init__ (cycle)
+    from log_analyzer.apps.vpl import VplParser
+    from log_analyzer.apps.ork import OrkParser
+    from log_analyzer.apps.voci import VociParser
+    from log_analyzer.apps.padroes import VplPadrao, OrkPadrao, VociPadrao
+
     registro = Registro_de_Aplicacoes()
     registro.registrar("VPL", VplParser(), VplPadrao())
     registro.registrar("ORK", OrkParser(), OrkPadrao())

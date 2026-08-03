@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% block title %}Chamada {{ call.call_id }} - Call Analysis Dashboard{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3>&#x1F4DE; Chamada: <code>{{ call.call_id }}</code></h3>
+    <a href="/" class="btn btn-outline-secondary btn-sm">&larr; Nova busca</a>
+</div>
+
+<!-- Duration bar -->
+{% if call.start_time and call.end_time %}
+<div class="alert alert-light border">
+    <strong>&#x23F1;&#xFE0F; Duração:</strong> {{ "%.1f"|format((call.end_time - call.start_time).total_seconds()) }}s
+    &nbsp;|&nbsp; <strong>Início:</strong> {{ call.start_time.strftime('%H:%M:%S') }}
+    &nbsp;|&nbsp; <strong>Fim:</strong> {{ call.end_time.strftime('%H:%M:%S') }}
+    {% if call.hangup_reason %}
+    &nbsp;|&nbsp; <strong>Encerramento:</strong> <span class="badge bg-warning text-dark">{{ call.hangup_reason }}</span>
+    {% endif %}
+</div>
+{% endif %}
+
+<div class="row">
+    <!-- Left column: customer + debt + config + performance + problems -->
+    <div class="col-lg-3">
+        <!-- Customer Card -->
+        <div class="card mb-3">
+            <div class="card-header bg-primary text-white">&#x1F464; Dados do Cliente</div>
+            <div class="card-body py-2">
+                <p class="mb-1"><strong>Nome:</strong> {{ call.customer_name or '—' }}</p>
+                <p class="mb-1"><strong>CPF:</strong> {{ call.cpf or '—' }}</p>
+                <p class="mb-1"><strong>Telefone:</strong> {{ call.phone or '—' }}</p>
+                <p class="mb-1"><strong>Empresa:</strong> {{ call.company or '—' }}</p>
+                <p class="mb-0"><strong>Produto:</strong> {{ call.product or '—' }}</p>
+            </div>
+        </div>
+
+        <!-- Debt Card -->
+        <div class="card mb-3">
+            <div class="card-header bg-danger text-white">&#x1F4B0; Dívida</div>
+            <div class="card-body py-2">
+                <p class="mb-1"><strong>Valor Total:</strong> R$ {{ call.debt_total or '—' }}</p>
+                <p class="mb-1"><strong>Com Desconto:</strong> R$ {{ call.debt_discount or '—' }}</p>
+                <p class="mb-1"><strong>Vencimento:</strong> {{ call.debt_due_date or '—' }}</p>
+                <p class="mb-1"><strong>Dias Atraso:</strong> {{ call.days_overdue or '—' }}</p>
+                <p class="mb-0"><strong>Parcelas:</strong> {{ call.installments_overdue or '—' }}</p>
+            </div>
+        </div>
+
+        <!-- Config Card -->
+        <div class="card mb-3">
+            <div class="card-header bg-secondary text-white">&#x1F916; Configuração</div>
+            <div class="card-body py-2">
+                <p class="mb-1"><strong>Assistente:</strong> {{ call.assistant_name or '—' }}</p>
+                <p class="mb-1"><strong>TTS:</strong> {{ call.tts_supplier or '—' }}</p>
+                <p class="mb-1"><strong>VPL IP:</strong> {{ call.vpl_ip or '—' }}</p>
+                <p class="mb-1"><strong>ORK IP:</strong> {{ call.ork_ip or '—' }}</p>
+                <p class="mb-1"><strong>Kamailio IP:</strong> {{ call.kamailio_ip or '—' }}</p>
+                {% if call.ai_models %}
+                <p class="mb-0"><strong>Modelos:</strong></p>
+                <ul class="list-unstyled ms-2 mb-0">
+                    {% for model in call.ai_models %}
+                    <li><small class="text-muted">{{ model.ai_type }}:</small> <small>{{ model.model_name }}</small></li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Performance Card -->
+        <div class="card mb-3">
+            <div class="card-header bg-info text-white">&#x1F4CA; Performance</div>
+            <div class="card-body py-2">
+                {% if call.tts_latencies %}
+                <p class="mb-1"><strong>TTS:</strong> avg={{ (call.tts_latencies|sum / call.tts_latencies|length)|round(0)|int }}ms, max={{ call.tts_latencies|max }}ms</p>
+                {% endif %}
+                {% if call.categorizer_latencies %}
+                <p class="mb-1"><strong>Cat:</strong> avg={{ (call.categorizer_latencies|sum / call.categorizer_latencies|length)|round(1) }}ms</p>
+                {% endif %}
+                <p class="mb-1"><strong>Cache:</strong> {{ call.cache_hits }} hits / {{ call.cache_misses }} misses</p>
+                {% if call.session_summary %}
+                <hr class="my-1">
+                <small>
+                    <p class="mb-0">LLM: {{ call.session_summary.llm_calls }} | TTS: {{ call.session_summary.tts_calls }} | ASR: {{ call.session_summary.asr_calls }} | Cat: {{ call.session_summary.categorizer_calls }}</p>
+                </small>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Problems Card -->
+        <div class="card mb-3">
+            <div class="card-header {% if call.no_voice_timeouts > 0 or call.error_entries %}bg-warning text-dark{% else %}bg-success text-white{% endif %}">
+                &#x26A0;&#xFE0F; Problemas
+            </div>
+            <div class="card-body py-2">
+                {% if call.no_voice_timeouts == 0 and not call.error_entries and not call.missing_audio_files %}
+                <p class="text-success mb-0">&#x2705; Nenhum problema</p>
+                {% else %}
+                {% if call.no_voice_timeouts > 0 %}
+                <p class="mb-1"><span class="badge bg-warning text-dark">{{ call.no_voice_timeouts }}</span> timeout(s) de voz</p>
+                {% endif %}
+                {% for rep in call.audio_repetitions %}
+                <p class="mb-1"><span class="badge bg-secondary">{{ rep.repetition_count }}x</span> repetição</p>
+                {% endfor %}
+                {% for f in call.missing_audio_files %}
+                <p class="text-danger mb-1"><small>📁 {{ f | truncate(50) }}</small></p>
+                {% endfor %}
+                {% if call.error_entries %}
+                <p class="mb-0"><span class="badge bg-danger">{{ call.error_entries|length }}</span> erro(s)</p>
+                {% endif %}
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Middle column: conversation + timeline + report -->
+    <div class="col-lg-5">
+        <!-- Conversation Card -->
+        <div class="card mb-3">
+            <div class="card-header bg-dark text-white">&#x1F4AC; Conversa</div>
+            <div class="card-body">
+                {% if call.conversation %}
+                {% for msg in call.conversation %}
+                <div class="p-2 mb-2 rounded {% if msg.speaker.value == 'customer' %}conversation-customer{% else %}conversation-assistant{% endif %}">
+                    <small class="text-muted">{{ msg.timestamp.strftime('%H:%M:%S') }}</small>
+                    <strong>{% if msg.speaker.value == 'customer' %}&#x1F9D1; Cliente{% else %}&#x1F916; Assistente{% endif %}:</strong>
+                    {{ msg.text }}
+                </div>
+                {% endfor %}
+                {% else %}
+                <p class="text-muted">Nenhuma mensagem de conversa registrada.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Function Calls Card -->
+        {% set tool_events = call.events | selectattr('event_type.value', 'equalto', 'tool_call') | list %}
+        {% if tool_events %}
+        <div class="card mb-3">
+            <div class="card-header" style="background-color: #ff6f00; color: white;">🔧 Chamadas de Função</div>
+            <div class="card-body" style="max-height: 400px; overflow-y: auto;">
+                {% for event in tool_events %}
+                <div class="p-2 mb-2 rounded" style="background-color: #fff3e0; border-left: 4px solid #ff6f00;">
+                    <small class="text-muted">{{ event.timestamp.strftime('%H:%M:%S') }}</small>
+                    <strong>{{ event.metadata.get('tool_name', 'unknown') }}</strong>
+                    {% if event.metadata.get('arguments') %}
+                    <div class="mt-1">
+                        <small class="text-muted">Chamada:</small>
+                        <code style="font-size: 0.8rem;">{{ event.metadata.get('arguments', '') }}</code>
+                    </div>
+                    {% endif %}
+                    {% if event.metadata.get('result') %}
+                    <div class="mt-1 p-1 rounded" style="background-color: #ffffff; border: 1px solid #ffe0b2;">
+                        <small class="text-muted">Resultado:</small>
+                        <pre class="mb-0" style="white-space: pre-wrap; font-size: 0.75rem;">{{ event.metadata.get('result') }}</pre>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Timeline Card -->
+        <div class="card mb-3">
+            <div class="card-header">&#x1F550; Timeline</div>
+            <div class="card-body" style="max-height: 800px; overflow-y: auto; font-size: 0.85rem;">
+                {% for event in call.events %}
+                <div class="timeline-event mb-2">
+                    <small class="text-muted">{{ event.timestamp.strftime('%H:%M:%S.%f')[:12] }}</small>
+                    {% if event.event_type.value == 'stage_transition' %}
+                    <span class="badge bg-primary">Stage</span> {{ event.metadata.get('from', '?') }} &rarr; <strong>{{ event.metadata.get('to', '?') }}</strong>
+                    {% elif event.event_type.value == 'categorizer_decision' %}
+                    <span class="badge bg-purple" style="background-color: #9c27b0;">Categorizer</span> conf={{ event.metadata.get('confidence', '?') }}
+                    {% elif event.event_type.value == 'bot_response' %}
+                    <span class="badge bg-info">Bot</span> {{ event.content[:100] }}
+                    {% elif event.event_type.value == 'asr_transcription' %}
+                    <span class="badge bg-success">ASR</span> {{ event.content }}
+                    {% elif event.event_type.value == 'tool_call' %}
+                    <span class="badge" style="background-color: #ff6f00;">🔧 Tool</span>
+                    <strong>{{ event.content }}</strong>
+                    {% if event.metadata.get('result') %}
+                    <div class="mt-1 p-2 border rounded" style="background-color: #fff3e0; font-size: 0.8rem; max-height: 200px; overflow-y: auto;">
+                        <strong>Resultado:</strong>
+                        <pre class="mb-0" style="white-space: pre-wrap; font-size: 0.75rem;">{{ event.metadata.get('result') }}</pre>
+                    </div>
+                    {% endif %}
+                    {% elif event.event_type.value == 'error' %}
+                    <span class="badge bg-danger">Erro</span> <small>{{ event.content[:120] }}</small>
+                    {% else %}
+                    <span class="badge bg-secondary">Log</span> <span class="text-muted">{{ event.content[:200] }}</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Curation Report Card -->
+        <div class="card mb-3">
+            <div class="card-header bg-dark text-white">&#x1F4DD; Relatório de Curadoria</div>
+            <div class="card-body">
+                <form id="report-form">
+                    <input type="hidden" name="call_id" value="{{ call.call_id }}">
+                    <div class="mb-3">
+                        <textarea class="form-control" name="report_text" id="report_text" rows="6"
+                                  placeholder="Escreva aqui suas observações sobre esta chamada...">{{ report.report_text if report else '' }}</textarea>
+                    </div>
+                    <button type="submit" class="btn btn-success" id="save-btn">&#x1F4BE; Salvar Relatório</button>
+                    <span id="save-feedback" class="ms-2 text-success" style="display:none;">&#x2705; Salvo!</span>
+                </form>
+                {% if report %}
+                <small class="text-muted mt-2 d-block">
+                    Criado: {{ report.created_at.strftime('%d/%m/%Y %H:%M') }}
+                    {% if report.modified_at != report.created_at %}
+                    | Modificado: {{ report.modified_at.strftime('%d/%m/%Y %H:%M') }}
+                    {% endif %}
+                </small>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Right column: mailing data -->
+    <div class="col-lg-4">
+        {% if call.raw_mailing_data %}
+        <div class="card mb-3">
+            <div class="card-header bg-dark text-white">📋 Mailing Data</div>
+            <div class="card-body" style="max-height: 90vh; overflow-y: auto; font-size: 0.8rem;">
+                <table class="table table-sm table-striped mb-0">
+                    <thead>
+                        <tr><th>Campo</th><th>Valor</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for key, value in call.raw_mailing_data.items() %}
+                        {% if value and value != 'None' and value != 'False' and value != 'NULL' %}
+                        <tr>
+                            <td><strong>{{ key }}</strong></td>
+                            <td>
+                                {% if value is mapping %}
+                                <pre class="mb-0" style="white-space: pre-wrap; font-size: 0.75rem;">{{ value | tojson(indent=2) }}</pre>
+                                {% else %}
+                                {{ value }}
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('report-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const formData = new FormData(this);
+    const btn = document.getElementById('save-btn');
+    const feedback = document.getElementById('save-feedback');
+    
+    btn.disabled = true;
+    btn.textContent = 'Salvando...';
+    
+    try {
+        const response = await fetch('/reports/save', {
+            method: 'POST',
+            body: formData,
+        });
+        const data = await response.json();
+        
+        if (response.ok) {
+            feedback.style.display = 'inline';
+            feedback.textContent = '\u2705 Salvo!';
+            feedback.className = 'ms-2 text-success';
+            setTimeout(() => { feedback.style.display = 'none'; }, 3000);
+        } else {
+            feedback.style.display = 'inline';
+            feedback.textContent = '\u274C ' + (data.error || 'Erro ao salvar');
+            feedback.className = 'ms-2 text-danger';
+        }
+    } catch (err) {
+        feedback.style.display = 'inline';
+        feedback.textContent = '\u274C Erro de conexão';
+        feedback.className = 'ms-2 text-danger';
+    }
+    
+    btn.disabled = false;
+    btn.textContent = '\uD83D\uDCBE Salvar Relatório';
+});
+</script>
+{% endblock %}

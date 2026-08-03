@@ -1,0 +1,294 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Create data model definitions in `log_analyzer/apps/call_parser.py`": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177276
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014191339
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014388532
+      }
+    ],
+    "1.2 Create CallId validator in `dashboard/validators.py`": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177350
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014192090
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014389458
+      }
+    ],
+    "1.4 Create Flask app skeleton in `dashboard/app.py`": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177417
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014192969
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014390319
+      }
+    ],
+    "1.5 Create base template and search page": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177502
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014397811
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014665316
+      }
+    ],
+    "2.1 Implement pass 1 — line filtering in `log_analyzer/apps/call_parser.py`": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177547
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014398582
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014666071
+      }
+    ],
+    "2.2 Implement pass 2 — regex extraction in `log_analyzer/apps/call_parser.py`": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177641
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014689787
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015044982
+      }
+    ],
+    "2.3 Implement `parse(self, call_id: str) -> CallData | None` method": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177693
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015045083
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015421477
+      }
+    ],
+    "3. Checkpoint - Ensure parser tests pass": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177742
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015425832
+      }
+    ],
+    "4.1 Implement CurationStore in `dashboard/store.py`": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177792
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014399499
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014666930
+      }
+    ],
+    "5.1 Implement search and analysis routes in `dashboard/app.py`": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177842
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015045160
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015422675
+      }
+    ],
+    "5.2 Create analysis template `dashboard/templates/analysis.html`": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177926
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015045223
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015423090
+      }
+    ],
+    "6. Checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014177997
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015426747
+      }
+    ],
+    "7.1 Implement report routes in `dashboard/app.py`": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014178046
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015045302
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015423879
+      }
+    ],
+    "7.2 Create reports list template `dashboard/templates/reports.html`": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014178097
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015424985
+      }
+    ],
+    "8.1 Create shared test fixtures in `tests/conftest.py`": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014178148
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015427966
+      }
+    ],
+    "9. Final checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014178200
+      },
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015428791
+      }
+    ],
+    "1. Set up project structure and core data models": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014665401
+      }
+    ],
+    "4. Implement CurationStore (SQLite persistence)": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783014667024
+      }
+    ],
+    "2. Implement CallLogParser (two-pass parsing)": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015421601
+      }
+    ],
+    "5. Implement Flask routes and analysis rendering": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015423160
+      }
+    ],
+    "7. Implement reports routes and export": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015425049
+      }
+    ],
+    "8. Create test fixtures and conftest": [
+      {
+        "executionId": "53a2127f-321b-4985-8010-d16e0f52491f",
+        "chatSessionId": "sess_65076eb0-ac3d-4ce6-94ff-7ec1fbadb80c",
+        "timestamp": 1783015428322
+      }
+    ]
+  }
+}
