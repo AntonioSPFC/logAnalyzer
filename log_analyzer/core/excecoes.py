@@ -1,14 +1,13 @@
 """Hierarquia de exceções do Analisador de Logs.
 
-Exceções:
-    ErroDoAnalisador — exceção base de todo o analisador.
-    ErroDeRegistro   — interface não implementada, id duplicado, app não suportada.
-    ErroDeArquivo    — arquivo ilegível, vazio, grande demais ou formato inválido.
-    ErroDeIdentificador — identificador inválido (vazio, espaços ou > 256 caracteres).
+As exceções legadas preservam seus contratos da Fase 1. As exceções da Fase 2
+expõem somente contexto seguro e estruturado: código, token de arquivo e
+posição. Dados brutos não fazem parte das mensagens dessas exceções.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -74,3 +73,104 @@ class ErroDeIdentificador(ErroDoAnalisador):
         contexto.update(extra)
         super().__init__(mensagem, contexto=contexto)
         self.identificador = identificador
+
+
+_PADRAO_CODIGO_SEGURO = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
+_PADRAO_TOKEN_SEGURO = re.compile(
+    r"(?:<[A-Za-z][A-Za-z0-9_-]{0,63}>|[A-Za-z][A-Za-z0-9_-]{0,63})\Z"
+)
+
+
+def _criar_contexto_seguro(
+    *,
+    codigo: str,
+    arquivo_token: str | None,
+    posicao: int | None,
+) -> dict[str, str | int]:
+    """Valida e cria contexto que pode atravessar fronteiras de diagnóstico.
+
+    Os erros de validação também usam textos constantes para não ecoar o valor
+    rejeitado. Tokens aceitam somente um identificador opaco, com ou sem
+    delimitadores ``<...>``; separadores de caminho não são permitidos.
+    """
+
+    if not isinstance(codigo, str) or _PADRAO_CODIGO_SEGURO.fullmatch(codigo) is None:
+        raise ValueError("Código de erro seguro inválido.")
+
+    if arquivo_token is not None and (
+        not isinstance(arquivo_token, str)
+        or _PADRAO_TOKEN_SEGURO.fullmatch(arquivo_token) is None
+    ):
+        raise ValueError("Token de arquivo seguro inválido.")
+
+    if posicao is not None and (
+        isinstance(posicao, bool) or not isinstance(posicao, int) or posicao < 0
+    ):
+        raise ValueError("Posição segura inválida.")
+
+    contexto: dict[str, str | int] = {"codigo": codigo}
+    if arquivo_token is not None:
+        contexto["arquivo_token"] = arquivo_token
+    if posicao is not None:
+        contexto["posicao"] = posicao
+    return contexto
+
+
+class _ErroComContextoSeguro(ErroDoAnalisador):
+    """Base interna para falhas da Fase 2 que podem chegar à saída segura."""
+
+    CODIGO_PADRAO = "ANALYZER_ERROR"
+    MENSAGEM_SEGURA = "Falha no Analisador de Logs."
+
+    def __init__(
+        self,
+        *,
+        codigo: str | None = None,
+        arquivo_token: str | None = None,
+        posicao: int | None = None,
+    ) -> None:
+        codigo_resolvido = self.CODIGO_PADRAO if codigo is None else codigo
+        contexto = _criar_contexto_seguro(
+            codigo=codigo_resolvido,
+            arquivo_token=arquivo_token,
+            posicao=posicao,
+        )
+        super().__init__(self.MENSAGEM_SEGURA, contexto=contexto)
+        self.codigo = codigo_resolvido
+        self.arquivo_token = arquivo_token
+        self.posicao = posicao
+
+
+class ErroDeDecodificacao(_ErroComContextoSeguro):
+    """Falha de decodificação estrita sem exposição dos bytes de origem."""
+
+    CODIGO_PADRAO = "DECODE_ERROR"
+    MENSAGEM_SEGURA = "Falha de decodificação da fonte."
+
+
+class ErroTemporal(_ErroComContextoSeguro):
+    """Falha ao resolver um timestamp sem exposição do texto original."""
+
+    CODIGO_PADRAO = "TEMPORAL_ERROR"
+    MENSAGEM_SEGURA = "Falha na resolução temporal da entrada."
+
+
+class ErroDeCatalogo(_ErroComContextoSeguro):
+    """Falha de carga, integridade ou avaliação do catálogo de regras."""
+
+    CODIGO_PADRAO = "CATALOG_ERROR"
+    MENSAGEM_SEGURA = "Falha no catálogo de regras."
+
+
+class ErroDeSanitizacao(_ErroComContextoSeguro):
+    """Falha fail-closed que suprime qualquer conteúdo parcialmente sanitizado."""
+
+    CODIGO_PADRAO = "SANITIZATION_ERROR"
+    MENSAGEM_SEGURA = "Falha de sanitização; conteúdo suprimido."
+
+
+class ErroDeIntegridadeDaFonte(_ErroComContextoSeguro):
+    """Falha quando a fonte muda ou não pode ter sua identidade confirmada."""
+
+    CODIGO_PADRAO = "SOURCE_CHANGED"
+    MENSAGEM_SEGURA = "A integridade da fonte não pôde ser confirmada."

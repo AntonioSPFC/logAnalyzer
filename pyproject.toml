@@ -7,7 +7,9 @@ name = "analisador-logs"
 version = "0.1.0"
 description = "Ferramenta de análise de logs multi-aplicação (VPL, ORK, VOCI)"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "tzdata==2025.2",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -24,6 +26,12 @@ analisador-logs = "log_analyzer.cli.main:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "slow: testes de desempenho e memória (executar com -m slow)",
+]
 
 [tool.setuptools.packages.find]
 include = ["log_analyzer*", "dashboard*"]
+
+[tool.setuptools.package-data]
+log_analyzer = ["catalogos/*.json"]

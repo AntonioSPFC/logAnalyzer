@@ -1,40 +1,87 @@
-"""Orquestrador principal do Analisador de Logs.
+"""Fachada preservada do Analisador de Logs.
 
-Coordena o fluxo completo de análise: validação de entradas, resolução de
-parser/padrão via Registro, carregamento, interpretação, filtragem,
-classificação, correlação e composição do resultado.
+A fachada mantém o contrato público da Fase 1 e roteia internamente cada
+seleção efetiva para um único fluxo:
 
-Acumula erros sem abortar (Req 1.2, 10.x). Trata "nenhum arquivo" (Req 3.6, 10.1)
-e "Aplicação não informada" (Req 2.3, 2.4).
+* VPL/ORK com a capacidade opcional ``Parser_de_Bloco`` usam
+  :class:`PipelineFase2`;
+* VOCI, plugins line-based e VPL/ORK sem essa capacidade permanecem no fluxo
+  legado.
 
-Requirements: 2.3, 2.4, 2.5, 3.6, 10.1, 1.2, 5.6
+O roteamento ocorre antes de qualquer arquivo ser aberto. Assim, fontes da
+Fase 2 nunca são materializadas pelo carregador legado e entradas com
+metadados novos nunca passam pela timeline ou pela correlação presumida da
+Fase 1.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from typing import Iterable, TypeVar
 
 from log_analyzer.core.agrupamento import agrupar_por_aplicacao
 from log_analyzer.core.carregador import carregar_arquivo
+from log_analyzer.core.composicao import compor_resultado_fase2
 from log_analyzer.core.contagens import calcular_contagens
 from log_analyzer.core.correlacao import correlacionar_vpl_ork
-from log_analyzer.core.excecoes import ErroDeIdentificador, ErroDeRegistro
+from log_analyzer.core.excecoes import ErroDeRegistro
 from log_analyzer.core.filtro import filtrar_por_identificador
+from log_analyzer.core.interfaces import Parser_de_Bloco
 from log_analyzer.core.modelos import (
     ArquivoSelecionado,
+    EntradaDeLog,
+    EstadoSanitizacao,
     MensagemDeErro,
     ResultadoDeAnalise,
 )
 from log_analyzer.core.ordenacao import ordenar_linha_do_tempo
+from log_analyzer.core.pipeline_fase2 import PipelineFase2
 from log_analyzer.core.registro import Registro_de_Aplicacoes
 from log_analyzer.core.validacao import validar_identificador
 
 
-class Analisador_de_Logs:
-    """Orquestrador principal que coordena todo o pipeline de análise.
+_APLICACOES_FASE2 = frozenset({"VPL", "ORK"})
+_MENSAGEM_SEM_CORRESPONDENCIA_FASE2 = (
+    "Nenhuma entrada correspondeu integralmente à consulta."
+)
+_PREFIXO_SEM_CORRESPONDENCIA_LEGADO = (
+    "Nenhuma correspondência encontrada para o identificador "
+)
 
-    Não conhece Aplicações concretas — apenas o Registro e as interfaces comuns.
-    """
+_T = TypeVar("_T")
+
+
+@dataclass(frozen=True)
+class _ExecucaoLegada:
+    """Resultado legado e metadados internos usados apenas na composição mista."""
+
+    resultado: ResultadoDeAnalise
+    aplicacoes_analisadas: tuple[str, ...] = ()
+    aplicacoes_invalidas: tuple[str, ...] = ()
+
+
+def _sem_duplicatas(valores: Iterable[_T]) -> list[_T]:
+    resultado: list[_T] = []
+    for valor in valores:
+        if valor not in resultado:
+            resultado.append(valor)
+    return resultado
+
+
+def _entradas_do_resultado(
+    resultado: ResultadoDeAnalise,
+) -> list[EntradaDeLog]:
+    """Obtém cada ocorrência pela coleção canônica agrupada do resultado."""
+
+    return [
+        entrada
+        for entradas in resultado.entradas_por_aplicacao.values()
+        for entrada in entradas
+    ]
+
+
+class Analisador_de_Logs:
+    """Orquestrador público que depende somente do registro e dos contratos."""
 
     def __init__(self, registro: Registro_de_Aplicacoes) -> None:
         self._registro = registro
@@ -42,41 +89,16 @@ class Analisador_de_Logs:
     def analisar(
         self, selecao: list[ArquivoSelecionado], identificador: str
     ) -> ResultadoDeAnalise:
-        """Executa o pipeline completo de análise.
+        """Analisa a seleção preservando a assinatura e o retorno públicos.
 
-        Passos:
-        1. Validar identificador — se inválido, levanta ErroDeIdentificador.
-        2. Se seleção é vazia — retorna resultado com mensagem de erro (Req 3.6, 10.1).
-        3. Para cada ArquivoSelecionado:
-           a. Se app_id é None → erro "Aplicação não informada", skip.
-           b. Resolver parser/padrão via registro → falha → erro, skip.
-           c. Carregar arquivo → falha → erro, skip.
-           d. Interpretar linhas (com ordem_de_leitura correta).
-           e. Filtrar pelo identificador.
-           f. Classificar cada entrada filtrada.
-        4. Correlacionar VPL ↔ ORK se ambos presentes.
-        5. Compor resultado: ordenar, agrupar, calcular contagens.
-        6. Retornar ResultadoDeAnalise.
-
-        Reassociação (Req 2.5): como cada ArquivoSelecionado é processado
-        independentemente em ordem, a última aparição de um mesmo caminho com
-        app_ids diferentes resulta na prevalência da última associação.
-
-        Args:
-            selecao: Lista de ArquivoSelecionado com caminho e app_id.
-            identificador: Cadeia de texto a ser buscada nos logs.
-
-        Returns:
-            ResultadoDeAnalise com entradas filtradas, agrupadas, ordenadas,
-            contagens e erros acumulados.
-
-        Raises:
-            ErroDeIdentificador: Se o identificador é inválido.
+        A validação da consulta ocorre antes da reassociação, da resolução de
+        plugins e de qualquer acesso a arquivo. Para caminhos repetidos, somente
+        a última associação é efetiva. Depois disso, a capacidade opcional do
+        parser decide o fluxo sem importar implementações concretas no núcleo.
         """
-        # 1. Validar identificador
+
         validar_identificador(identificador)
 
-        # 2. Verificar se seleção é vazia (Req 3.6, 10.1)
         if not selecao:
             return ResultadoDeAnalise(
                 identificador=identificador,
@@ -86,18 +108,103 @@ class Analisador_de_Logs:
                 ],
             )
 
-        erros: list[MensagemDeErro] = []
-        # Acumula entradas por app_id para posterior correlação e composição.
-        # Reassociação: se o mesmo caminho aparece múltiplas vezes, apenas a
-        # última iteração efetiva contribui (processamos todas em sequência,
-        # cada uma é independente).
-        from log_analyzer.core.modelos import EntradaDeLog
+        selecao_efetiva = self._aplicar_reassociacao(selecao)
+        selecao_fase2, selecao_legada = self._separar_fluxos(
+            selecao_efetiva
+        )
 
-        todas_entradas: list[EntradaDeLog] = []
+        resultado_fase2: ResultadoDeAnalise | None = None
+        if selecao_fase2:
+            resultado_fase2 = PipelineFase2(self._registro).executar(
+                selecao_fase2,
+                identificador,
+            )
 
-        # 3. Processar cada arquivo selecionado
+        execucao_legada: _ExecucaoLegada | None = None
+        if selecao_legada:
+            execucao_legada = self._executar_fluxo_legado(
+                selecao_legada,
+                identificador,
+            )
+
+        if resultado_fase2 is None:
+            # Há pelo menos uma seleção efetiva, portanto o fluxo legado existe.
+            assert execucao_legada is not None
+            return execucao_legada.resultado
+        if execucao_legada is None:
+            return resultado_fase2
+
+        return self._combinar_resultados(
+            resultado_fase2,
+            execucao_legada,
+        )
+
+    def _aplicar_reassociacao(
+        self,
+        selecao: list[ArquivoSelecionado],
+    ) -> list[ArquivoSelecionado]:
+        """Mantém a última associação registrada e todos os erros de tentativa.
+
+        ``None`` e IDs não registrados não são associações efetivas: continuam
+        na seleção para produzir o erro legado correspondente, mas não
+        substituem nem são substituídos no mapa caminho→Aplicação.
+        """
+
+        ultima_posicao_por_caminho = {
+            arquivo.caminho: indice
+            for indice, arquivo in enumerate(selecao)
+            if arquivo.app_id is not None
+            and self._registro.esta_registrada(arquivo.app_id)
+        }
+        return [
+            arquivo
+            for indice, arquivo in enumerate(selecao)
+            if arquivo.app_id is None
+            or not self._registro.esta_registrada(arquivo.app_id)
+            or ultima_posicao_por_caminho[arquivo.caminho] == indice
+        ]
+
+    def _separar_fluxos(
+        self,
+        selecao: list[ArquivoSelecionado],
+    ) -> tuple[list[ArquivoSelecionado], list[ArquivoSelecionado]]:
+        """Roteia por app e capacidade sem abrir ou carregar as fontes."""
+
+        fase2: list[ArquivoSelecionado] = []
+        legado: list[ArquivoSelecionado] = []
+
         for arquivo in selecao:
-            # 3a. Aplicação não informada (Req 2.3, 2.4)
+            if arquivo.app_id not in _APLICACOES_FASE2:
+                legado.append(arquivo)
+                continue
+
+            try:
+                parser, _ = self._registro.obter(arquivo.app_id)
+            except ErroDeRegistro:
+                # O fluxo legado preserva a mensagem pública de registro.
+                legado.append(arquivo)
+                continue
+
+            if isinstance(parser, Parser_de_Bloco):
+                fase2.append(arquivo)
+            else:
+                legado.append(arquivo)
+
+        return fase2, legado
+
+    def _executar_fluxo_legado(
+        self,
+        selecao: list[ArquivoSelecionado],
+        identificador: str,
+    ) -> _ExecucaoLegada:
+        """Executa literalmente o pipeline line-based preservado da Fase 1."""
+
+        erros: list[MensagemDeErro] = []
+        todas_entradas: list[EntradaDeLog] = []
+        aplicacoes_analisadas: list[str] = []
+        aplicacoes_invalidas: list[str] = []
+
+        for arquivo in selecao:
             if arquivo.app_id is None:
                 erros.append(
                     MensagemDeErro(
@@ -107,46 +214,40 @@ class Analisador_de_Logs:
                 )
                 continue
 
-            # 3b. Resolver parser/padrão via registro
             try:
                 parser, padrao = self._registro.obter(arquivo.app_id)
-            except ErroDeRegistro as e:
+            except ErroDeRegistro as erro:
                 erros.append(
                     MensagemDeErro(
                         arquivo_ou_app=arquivo.app_id,
-                        descricao=e.mensagem,
+                        descricao=erro.mensagem,
                     )
                 )
+                aplicacoes_invalidas.append(arquivo.app_id)
                 continue
 
-            # 3c. Carregar arquivo
             resultado_carga = carregar_arquivo(arquivo.caminho)
             if isinstance(resultado_carga, MensagemDeErro):
                 erros.append(resultado_carga)
+                aplicacoes_invalidas.append(arquivo.app_id)
                 continue
 
-            linhas: list[str] = resultado_carga
-
-            # 3d. Interpretar linhas com parser (definir ordem_de_leitura correta)
-            entradas_interpretadas = parser.interpretar_arquivo(linhas)
-            # Atualizar ordem_de_leitura e aplicacao para cada entrada
-            entradas_com_ordem: list[EntradaDeLog] = []
-            for idx, entrada in enumerate(entradas_interpretadas):
-                # O parser pode já definir o campo aplicacao, mas para garantir
-                # consistência com a associação do ArquivoSelecionado, sobreescrevemos.
-                entrada_atualizada = replace(
+            entradas_interpretadas = parser.interpretar_arquivo(
+                resultado_carga
+            )
+            entradas_com_ordem = [
+                replace(
                     entrada,
                     aplicacao=arquivo.app_id,
-                    ordem_de_leitura=idx,
+                    ordem_de_leitura=indice,
                 )
-                entradas_com_ordem.append(entrada_atualizada)
-
-            # 3e. Filtrar pelo identificador
+                for indice, entrada in enumerate(entradas_interpretadas)
+            ]
             entradas_filtradas = filtrar_por_identificador(
-                entradas_com_ordem, identificador
+                entradas_com_ordem,
+                identificador,
             )
 
-            # 3f. Classificar cada entrada filtrada com o padrão da aplicação
             entradas_classificadas: list[EntradaDeLog] = []
             for entrada in entradas_filtradas:
                 try:
@@ -155,12 +256,11 @@ class Analisador_de_Logs:
                         replace(entrada, categoria=categoria)
                     )
                 except Exception:
-                    # Req 5.6: se não for possível classificar, registrar erro
                     erros.append(
                         MensagemDeErro(
                             arquivo_ou_app=arquivo.app_id,
                             descricao=(
-                                f"Erro ao classificar entrada da aplicação "
+                                "Erro ao classificar entrada da aplicação "
                                 f"'{arquivo.app_id}'."
                             ),
                         )
@@ -168,61 +268,155 @@ class Analisador_de_Logs:
                     entradas_classificadas.append(entrada)
 
             todas_entradas.extend(entradas_classificadas)
+            aplicacoes_analisadas.append(arquivo.app_id)
 
-        # 4. Correlacionar VPL ↔ ORK se ambos presentes
-        entradas_vpl = [e for e in todas_entradas if e.aplicacao == "VPL"]
-        entradas_ork = [e for e in todas_entradas if e.aplicacao == "ORK"]
+        entradas_vpl = [
+            entrada
+            for entrada in todas_entradas
+            if entrada.aplicacao == "VPL"
+        ]
+        entradas_ork = [
+            entrada
+            for entrada in todas_entradas
+            if entrada.aplicacao == "ORK"
+        ]
         entradas_outras = [
-            e for e in todas_entradas if e.aplicacao not in ("VPL", "ORK")
+            entrada
+            for entrada in todas_entradas
+            if entrada.aplicacao not in _APLICACOES_FASE2
         ]
 
         correlacao_encontrada = False
         if entradas_vpl and entradas_ork:
-            # Ambos os lados presentes — correlacionar
-            vpl_corr, ork_corr, correlacao_encontrada, erros_corr = (
-                correlacionar_vpl_ork(entradas_vpl, entradas_ork, identificador)
+            entradas_vpl, entradas_ork, correlacao_encontrada, erros_corr = (
+                correlacionar_vpl_ork(
+                    entradas_vpl,
+                    entradas_ork,
+                    identificador,
+                )
             )
             erros.extend(erros_corr)
-            todas_entradas = vpl_corr + ork_corr + entradas_outras
+            todas_entradas = entradas_vpl + entradas_ork + entradas_outras
         elif entradas_vpl or entradas_ork:
-            # Apenas um lado presente — verificar se o outro lado foi tentado
-            # (i.e., havia arquivos selecionados para a outra app que falharam)
             apps_selecionadas = {
-                a.app_id for a in selecao if a.app_id is not None
+                arquivo.app_id
+                for arquivo in selecao
+                if arquivo.app_id is not None
             }
-            if "VPL" in apps_selecionadas and "ORK" in apps_selecionadas:
-                # Ambos foram selecionados, mas um lado não produziu entradas
-                vpl_corr, ork_corr, correlacao_encontrada, erros_corr = (
+            if _APLICACOES_FASE2.issubset(apps_selecionadas):
+                entradas_vpl, entradas_ork, correlacao_encontrada, erros_corr = (
                     correlacionar_vpl_ork(
-                        entradas_vpl, entradas_ork, identificador
+                        entradas_vpl,
+                        entradas_ork,
+                        identificador,
                     )
                 )
                 erros.extend(erros_corr)
-                todas_entradas = vpl_corr + ork_corr + entradas_outras
+                todas_entradas = (
+                    entradas_vpl + entradas_ork + entradas_outras
+                )
 
-        # 5. Compor resultado
         linha_do_tempo = ordenar_linha_do_tempo(todas_entradas)
         entradas_por_aplicacao = agrupar_por_aplicacao(todas_entradas)
         contagem_por_categoria, contagem_por_aplicacao = calcular_contagens(
             todas_entradas
         )
 
-        # Mensagens informativas
         mensagens: list[str] = []
         if not todas_entradas and not erros:
             mensagens.append(
-                f"Nenhuma correspondência encontrada para o identificador "
+                "Nenhuma correspondência encontrada para o identificador "
                 f"'{identificador}'."
             )
 
-        # 6. Retornar ResultadoDeAnalise
-        return ResultadoDeAnalise(
-            identificador=identificador,
-            entradas_por_aplicacao=entradas_por_aplicacao,
-            linha_do_tempo=linha_do_tempo,
-            contagem_por_categoria=contagem_por_categoria,
-            contagem_por_aplicacao=contagem_por_aplicacao,
-            correlacao_encontrada=correlacao_encontrada,
-            erros=erros,
-            mensagens=mensagens,
+        return _ExecucaoLegada(
+            resultado=ResultadoDeAnalise(
+                identificador=identificador,
+                entradas_por_aplicacao=entradas_por_aplicacao,
+                linha_do_tempo=linha_do_tempo,
+                contagem_por_categoria=contagem_por_categoria,
+                contagem_por_aplicacao=contagem_por_aplicacao,
+                correlacao_encontrada=correlacao_encontrada,
+                erros=erros,
+                mensagens=mensagens,
+            ),
+            aplicacoes_analisadas=tuple(
+                _sem_duplicatas(aplicacoes_analisadas)
+            ),
+            aplicacoes_invalidas=tuple(
+                _sem_duplicatas(aplicacoes_invalidas)
+            ),
+        )
+
+    @staticmethod
+    def _combinar_resultados(
+        fase2: ResultadoDeAnalise,
+        legado: _ExecucaoLegada,
+    ) -> ResultadoDeAnalise:
+        """Combina fluxos sem aplicar adapters legados às entradas Fase 2."""
+
+        entradas = [
+            *_entradas_do_resultado(fase2),
+            *_entradas_do_resultado(legado.resultado),
+        ]
+        aplicacoes_analisadas = _sem_duplicatas(
+            (
+                *fase2.aplicacoes_analisadas,
+                *legado.aplicacoes_analisadas,
+            )
+        )
+        aplicacoes_ausentes_ou_invalidas = _sem_duplicatas(
+            (
+                *(
+                    app
+                    for app in fase2.aplicacoes_ausentes_ou_invalidas
+                    if app not in aplicacoes_analisadas
+                ),
+                *(
+                    app
+                    for app in legado.aplicacoes_invalidas
+                    if app not in aplicacoes_analisadas
+                ),
+            )
+        )
+
+        mensagens = [
+            mensagem
+            for mensagem in fase2.mensagens
+            if entradas
+            and mensagem != _MENSAGEM_SEM_CORRESPONDENCIA_FASE2
+            or not entradas
+        ]
+        mensagens.extend(
+            mensagem
+            for mensagem in legado.resultado.mensagens
+            if not mensagem.startswith(
+                _PREFIXO_SEM_CORRESPONDENCIA_LEGADO
+            )
+        )
+
+        return compor_resultado_fase2(
+            legado.resultado.identificador,
+            entradas,
+            categoria_de_cenario=fase2.categoria_de_cenario,
+            identificadores_extraidos=fase2.identificadores_extraidos,
+            vinculos=fase2.vinculos,
+            correlacao=fase2.correlacao,
+            correlacao_encontrada=fase2.correlacao_encontrada,
+            evidencias=fase2.evidencias,
+            regra_aplicada=fase2.regra_aplicada,
+            versao_catalogo=fase2.versao_catalogo,
+            # A parte legada ainda contém o objeto interno bruto. Marcar a
+            # composição como concluída faria a CLI confiar em uma visão
+            # parcialmente sanitizada; a fronteira de saída deve sanitizar a
+            # combinação inteira uma única vez.
+            estado_sanitizacao=EstadoSanitizacao.INTERNA_BRUTA,
+            causa_raiz=fase2.causa_raiz,
+            aplicacoes_analisadas=aplicacoes_analisadas,
+            aplicacoes_ausentes_ou_invalidas=(
+                aplicacoes_ausentes_ou_invalidas
+            ),
+            cobertura_rotulada=fase2.cobertura_rotulada,
+            erros=(*fase2.erros, *legado.resultado.erros),
+            mensagens=_sem_duplicatas(mensagens),
         )

@@ -7,18 +7,6 @@
     <a href="/" class="btn btn-outline-secondary btn-sm">&larr; Nova busca</a>
 </div>
 
-<!-- Duration bar -->
-{% if call.start_time and call.end_time %}
-<div class="alert alert-light border">
-    <strong>&#x23F1;&#xFE0F; Duração:</strong> {{ "%.1f"|format((call.end_time - call.start_time).total_seconds()) }}s
-    &nbsp;|&nbsp; <strong>Início:</strong> {{ call.start_time.strftime('%H:%M:%S') }}
-    &nbsp;|&nbsp; <strong>Fim:</strong> {{ call.end_time.strftime('%H:%M:%S') }}
-    {% if call.hangup_reason %}
-    &nbsp;|&nbsp; <strong>Encerramento:</strong> <span class="badge bg-warning text-dark">{{ call.hangup_reason }}</span>
-    {% endif %}
-</div>
-{% endif %}
-
 <div class="row">
     <!-- Left column: customer + debt + config + performance + problems -->
     <div class="col-lg-3">
@@ -51,7 +39,13 @@
             <div class="card-header bg-secondary text-white">&#x1F916; Configuração</div>
             <div class="card-body py-2">
                 <p class="mb-1"><strong>Assistente:</strong> {{ call.assistant_name or '—' }}</p>
-                <p class="mb-1"><strong>TTS:</strong> {{ call.tts_supplier or '—' }}</p>
+                <p class="mb-1"><strong>TTS:</strong> {{ call.tts_supplier or '—' }}{% if call.tts_voice %} / {{ call.tts_voice }}{% endif %}</p>
+                {% if call.tts_voice_id %}
+                <p class="mb-1"><strong>Voice ID:</strong> <code style="font-size: 0.75rem;">{{ call.tts_voice_id }}</code></p>
+                {% endif %}
+                {% if call.tts_model_id %}
+                <p class="mb-1"><strong>Model:</strong> {{ call.tts_model_id }}</p>
+                {% endif %}
                 <p class="mb-1"><strong>VPL IP:</strong> {{ call.vpl_ip or '—' }}</p>
                 <p class="mb-1"><strong>ORK IP:</strong> {{ call.ork_ip or '—' }}</p>
                 <p class="mb-1"><strong>Kamailio IP:</strong> {{ call.kamailio_ip or '—' }}</p>
@@ -80,7 +74,8 @@
                 {% if call.session_summary %}
                 <hr class="my-1">
                 <small>
-                    <p class="mb-0">LLM: {{ call.session_summary.llm_calls }} | TTS: {{ call.session_summary.tts_calls }} | ASR: {{ call.session_summary.asr_calls }} | Cat: {{ call.session_summary.categorizer_calls }}</p>
+                    <p class="mb-1"><strong>💰 Custo LLM:</strong> ${{ "%.4f"|format(call.session_summary.llm_cost) }} ({{ call.session_summary.llm_calls }} calls, {{ call.session_summary.llm_tokens_input + call.session_summary.llm_tokens_output }} tokens)</p>
+                    <p class="mb-0">TTS: {{ call.session_summary.tts_calls }} | ASR: {{ call.session_summary.asr_calls }} | Cat: {{ call.session_summary.categorizer_calls }}</p>
                 </small>
                 {% endif %}
             </div>
@@ -105,7 +100,16 @@
                 <p class="text-danger mb-1"><small>📁 {{ f | truncate(50) }}</small></p>
                 {% endfor %}
                 {% if call.error_entries %}
-                <p class="mb-0"><span class="badge bg-danger">{{ call.error_entries|length }}</span> erro(s)</p>
+                <p class="mb-1"><span class="badge bg-danger">{{ call.error_entries|length }}</span> erro(s):</p>
+                <div style="max-height: 200px; overflow-y: auto; font-size: 0.75rem;">
+                {% for err in call.error_entries %}
+                <a href="#" class="d-block text-danger text-decoration-none mb-1 error-link" 
+                   data-error-index="{{ loop.index0 }}"
+                   style="cursor: pointer;">
+                   🔗 {{ err[:100] }}{% if err|length > 100 %}...{% endif %}
+                </a>
+                {% endfor %}
+                </div>
                 {% endif %}
                 {% endif %}
             </div>
@@ -114,6 +118,28 @@
 
     <!-- Middle column: conversation + timeline + report -->
     <div class="col-lg-5">
+        <!-- Call Info Card -->
+        <div class="card mb-3">
+            <div class="card-header bg-primary text-white">📞 Informações da Chamada</div>
+            <div class="card-body py-2">
+                <div class="row">
+                    <div class="col-6">
+                        <p class="mb-1"><strong>Duração:</strong> {% if call.start_time and call.end_time %}{{ "%.1f"|format((call.end_time - call.start_time).total_seconds()) }}s{% else %}—{% endif %}</p>
+                        <p class="mb-1"><strong>Início:</strong> {% if call.start_time %}{{ call.start_time.strftime('%H:%M:%S') }}{% else %}—{% endif %}</p>
+                        <p class="mb-1"><strong>Fim:</strong> {% if call.end_time %}{{ call.end_time.strftime('%H:%M:%S') }}{% else %}—{% endif %}</p>
+                    </div>
+                    <div class="col-6">
+                        {% if call.hangup_reason %}
+                        <p class="mb-1"><strong>Disposition:</strong> <span class="badge bg-warning text-dark">{{ call.hangup_reason }}</span></p>
+                        {% endif %}
+                        {% if call.disposition_description %}
+                        <p class="mb-1"><strong>Descrição:</strong> {{ call.disposition_description }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Conversation Card -->
         <div class="card mb-3">
             <div class="card-header bg-dark text-white">&#x1F4AC; Conversa</div>
@@ -122,7 +148,7 @@
                 {% for msg in call.conversation %}
                 <div class="p-2 mb-2 rounded {% if msg.speaker.value == 'customer' %}conversation-customer{% else %}conversation-assistant{% endif %}">
                     <small class="text-muted">{{ msg.timestamp.strftime('%H:%M:%S') }}</small>
-                    <strong>{% if msg.speaker.value == 'customer' %}&#x1F9D1; Cliente{% else %}&#x1F916; Assistente{% endif %}:</strong>
+                    <strong>{% if msg.speaker.value == 'customer' %}&#x1F9D1; Cliente{% elif msg.stage %}<span class="badge bg-info">{{ msg.stage }}</span> Assistente{% else %}&#x1F916; Assistente{% endif %}:</strong>
                     {{ msg.text }}
                 </div>
                 {% endfor %}
@@ -131,6 +157,50 @@
                 {% endif %}
             </div>
         </div>
+
+        <!-- System Prompts Card -->
+        {% if call.classifier_prompt or call.finalizer_prompt or call.stage_sequence or flow_stages %}
+        <div class="card mb-3">
+            <div class="card-header bg-dark text-white">&#x1F9E0; System Prompts</div>
+            <div class="card-body py-2">
+                {% if flow_stages %}
+                <details class="mb-2">
+                    <summary style="cursor: pointer;"><strong>Estágios ({{ flow_stages|length }})</strong></summary>
+                    <div class="mt-2">
+                    {% for estagio in flow_stages %}
+                    <details class="mb-1">
+                        <summary style="cursor: pointer;"><strong>{{ estagio.name }}</strong>{% if estagio.versao %} — {{ estagio.versao }}{% endif %}</summary>
+                        {% if estagio.instruction %}
+                        <pre class="mt-1 mb-2 p-2 border rounded bg-light" style="white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; max-height: 300px; overflow-y: auto;">{{ estagio.instruction }}</pre>
+                        {% else %}
+                        <p class="mt-1 mb-2 text-muted"><small>— sem instrução —</small></p>
+                        {% endif %}
+                    </details>
+                    {% endfor %}
+                    </div>
+                </details>
+                {% elif call.stage_sequence %}
+                <details class="mb-2">
+                    <summary style="cursor: pointer;"><strong>Estágios</strong></summary>
+                    <pre class="mt-2 mb-0 p-2 border rounded bg-light" style="white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; max-height: 400px; overflow-y: auto;">{% for s in call.stage_sequence %}{{ loop.index }}. {{ s }}
+{% endfor %}</pre>
+                </details>
+                {% endif %}
+                {% if call.classifier_prompt %}
+                <details class="mb-2">
+                    <summary style="cursor: pointer;"><strong>Classifier prompt</strong></summary>
+                    <pre class="mt-2 mb-0 p-2 border rounded bg-light" style="white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; max-height: 400px; overflow-y: auto;">{{ call.classifier_prompt }}</pre>
+                </details>
+                {% endif %}
+                {% if call.finalizer_prompt %}
+                <details>
+                    <summary style="cursor: pointer;"><strong>Finalizer prompt</strong></summary>
+                    <pre class="mt-2 mb-0 p-2 border rounded bg-light" style="white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; max-height: 400px; overflow-y: auto;">{{ call.finalizer_prompt }}</pre>
+                </details>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
 
         <!-- Function Calls Card -->
         {% set tool_events = call.events | selectattr('event_type.value', 'equalto', 'tool_call') | list %}
@@ -159,40 +229,6 @@
             </div>
         </div>
         {% endif %}
-
-        <!-- Timeline Card -->
-        <div class="card mb-3">
-            <div class="card-header">&#x1F550; Timeline</div>
-            <div class="card-body" style="max-height: 800px; overflow-y: auto; font-size: 0.85rem;">
-                {% for event in call.events %}
-                <div class="timeline-event mb-2">
-                    <small class="text-muted">{{ event.timestamp.strftime('%H:%M:%S.%f')[:12] }}</small>
-                    {% if event.event_type.value == 'stage_transition' %}
-                    <span class="badge bg-primary">Stage</span> {{ event.metadata.get('from', '?') }} &rarr; <strong>{{ event.metadata.get('to', '?') }}</strong>
-                    {% elif event.event_type.value == 'categorizer_decision' %}
-                    <span class="badge bg-purple" style="background-color: #9c27b0;">Categorizer</span> conf={{ event.metadata.get('confidence', '?') }}
-                    {% elif event.event_type.value == 'bot_response' %}
-                    <span class="badge bg-info">Bot</span> {{ event.content[:100] }}
-                    {% elif event.event_type.value == 'asr_transcription' %}
-                    <span class="badge bg-success">ASR</span> {{ event.content }}
-                    {% elif event.event_type.value == 'tool_call' %}
-                    <span class="badge" style="background-color: #ff6f00;">🔧 Tool</span>
-                    <strong>{{ event.content }}</strong>
-                    {% if event.metadata.get('result') %}
-                    <div class="mt-1 p-2 border rounded" style="background-color: #fff3e0; font-size: 0.8rem; max-height: 200px; overflow-y: auto;">
-                        <strong>Resultado:</strong>
-                        <pre class="mb-0" style="white-space: pre-wrap; font-size: 0.75rem;">{{ event.metadata.get('result') }}</pre>
-                    </div>
-                    {% endif %}
-                    {% elif event.event_type.value == 'error' %}
-                    <span class="badge bg-danger">Erro</span> <small>{{ event.content[:120] }}</small>
-                    {% else %}
-                    <span class="badge bg-secondary">Log</span> <span class="text-muted">{{ event.content[:200] }}</span>
-                    {% endif %}
-                </div>
-                {% endfor %}
-            </div>
-        </div>
 
         <!-- Curation Report Card -->
         <div class="card mb-3">
@@ -252,6 +288,54 @@
     </div>
 </div>
 
+<!-- Timeline Card - Full Width -->
+<div class="card mb-3">
+    <div class="card-header">&#x1F550; Timeline</div>
+    <div class="card-body" style="max-height: 600px; overflow-y: auto; font-size: 0.85rem;">
+        {% for event in call.events %}
+        <div class="timeline-event mb-2" id="event-{{ loop.index }}">
+            <small class="text-muted">{{ event.timestamp.strftime('%H:%M:%S.%f')[:12] }}</small>
+            {% if event.event_type.value == 'stage_transition' %}
+            {% if event.metadata.get('source') == 'llm_stage' %}
+            <span class="badge" style="background-color: #00897b;">🧭 Estágio (LLM)</span> <strong>{{ event.metadata.get('to', '?') }}</strong>
+            {% else %}
+            <span class="badge bg-primary">Stage</span> {{ event.metadata.get('from', '?') }} &rarr; <strong>{{ event.metadata.get('to', '?') }}</strong>
+            {% endif %}
+            {% elif event.event_type.value == 'categorizer_decision' %}
+            <span class="badge bg-purple" style="background-color: #9c27b0;">Categorizer</span> conf={{ event.metadata.get('confidence', '?') }}
+            {% elif event.event_type.value == 'bot_response' %}
+            <span class="badge bg-info">Bot</span> {{ event.content[:100] }}
+            {% elif event.event_type.value == 'asr_transcription' %}
+            <span class="badge bg-success">ASR</span> {{ event.content }}
+            {% elif event.event_type.value == 'tool_call' %}
+            <span class="badge" style="background-color: #ff6f00;">🔧 Tool</span>
+            <strong>{{ event.content }}</strong>
+            {% if event.metadata.get('result') %}
+            <div class="mt-1 p-2 border rounded" style="background-color: #fff3e0; font-size: 0.8rem; max-height: 200px; overflow-y: auto;">
+                <strong>Resultado:</strong>
+                <pre class="mb-0" style="white-space: pre-wrap; font-size: 0.75rem;">{{ event.metadata.get('result') }}</pre>
+            </div>
+            {% endif %}
+            {% elif event.event_type.value == 'staging_decision' %}
+            <span class="badge" style="background-color: #e65100;">⚡ Staging</span> {{ event.content }}
+            {% elif event.event_type.value == 'finalize_decision' %}
+            <span class="badge" style="background-color: {% if 'ENCERRAR' in event.content %}#c62828{% else %}#2e7d32{% endif %};">🏁 Finalizar</span> {{ event.content }}
+            {% elif event.event_type.value == 'barge_in' %}
+            <span class="badge" style="background-color: #f57c00;">⚡ Barge-in</span> {{ event.content }}
+            {% elif event.event_type.value == 'filler' %}
+            <span class="badge" style="background-color: #78909c;">💬 Filler</span> <span class="text-muted">{{ event.content }}</span>
+            {% elif event.event_type.value == 'voice_detection' %}
+            <span class="badge" style="background-color: #455a64;">🎤 Voz</span> <span class="text-muted">{{ event.content }}</span>
+            {% elif event.event_type.value == 'error' %}
+            <span class="badge bg-danger">Erro</span> <small>{{ event.content[:120] }}</small>
+            {% else %}
+            <span class="badge bg-secondary">Log</span> <span class="text-muted">{{ event.content }}</span>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -290,6 +374,30 @@ document.getElementById('report-form').addEventListener('submit', async function
     
     btn.disabled = false;
     btn.textContent = '\uD83D\uDCBE Salvar Relatório';
+});
+
+// Error links: scroll to corresponding error in timeline
+document.querySelectorAll('.error-link').forEach(function(link) {
+    link.addEventListener('click', function(e) {
+        e.preventDefault();
+        var errorIndex = parseInt(this.dataset.errorIndex);
+        // Find all error badges in the timeline
+        var errorEvents = document.querySelectorAll('.timeline-event .badge.bg-danger');
+        if (errorEvents[errorIndex]) {
+            var targetEvent = errorEvents[errorIndex].closest('.timeline-event');
+            // Scroll the timeline container
+            var timelineBody = targetEvent.closest('.card-body');
+            if (timelineBody) {
+                timelineBody.scrollTop = targetEvent.offsetTop - timelineBody.offsetTop - 50;
+            }
+            // Highlight
+            targetEvent.style.backgroundColor = '#ffcdd2';
+            targetEvent.style.transition = 'background-color 0.3s';
+            setTimeout(function() {
+                targetEvent.style.backgroundColor = '';
+            }, 3000);
+        }
+    });
 });
 </script>
 {% endblock %}

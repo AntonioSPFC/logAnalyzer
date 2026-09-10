@@ -38,11 +38,14 @@ def analisador(registro):
 
 @pytest.fixture
 def arquivo_vpl(tmp_path):
-    """Cria um arquivo de log VPL temporário com entradas válidas."""
+    """Cria um arquivo VPL Fase 2 sintético com identificadores tipados."""
     conteudo = (
-        "2024-01-15 10:30:45.123 [INFO] mod_sofia.c:1234 Call abc123 initiated\n"
-        "2024-01-15 10:30:46.456 [DEBUG] mod_sofia.c:1235 Processing request\n"
-        "2024-01-15 10:30:47.789 [WARNING] mod_sofia.c:1236 Call abc123 timeout\n"
+        "2024-01-15 10:30:45.123 98.75% [INFO] mod_sofia.c:1234 "
+        "CallId=abc123 initiated\n"
+        "2024-01-15 10:30:46.456 98.75% [DEBUG] mod_sofia.c:1235 "
+        "Processing request\n"
+        "2024-01-15 10:30:47.789 98.75% [WARNING] mod_sofia.c:1236 "
+        "CallId=abc123 timeout\n"
     )
     arquivo = tmp_path / "vpl.log"
     arquivo.write_text(conteudo, encoding="utf-8")
@@ -51,11 +54,14 @@ def arquivo_vpl(tmp_path):
 
 @pytest.fixture
 def arquivo_ork(tmp_path):
-    """Cria um arquivo de log ORK temporário com entradas válidas."""
+    """Cria um arquivo ORK Fase 2 sintético com identificadores tipados."""
     conteudo = (
-        "2024-01-15 10:30:45.500|INFO|agent.main|Session abc123 started\n"
-        "2024-01-15 10:30:46.700|DEBUG|agent.tts|Processing audio\n"
-        "2024-01-15 10:30:48.000|ERROR|agent.main|Session abc123 failed\n"
+        "2024-01-15T13:30:45.500+00:00 ork-node.synthetic.invalid "
+        "ork-worker[123]: INFO - agent.main - TelecomCallId=abc123 started\n"
+        "2024-01-15T13:30:46.700+00:00 ork-node.synthetic.invalid "
+        "ork-worker[123]: DEBUG - agent.tts - Processing audio\n"
+        "2024-01-15T13:30:48.000+00:00 ork-node.synthetic.invalid "
+        "ork-worker[123]: ERROR - agent.main - CallId=abc123 failed\n"
     )
     arquivo = tmp_path / "ork.log"
     arquivo.write_text(conteudo, encoding="utf-8")
@@ -177,8 +183,8 @@ class TestFluxoCompleto:
         """Análise básica de um arquivo VPL deve funcionar."""
         selecao = [ArquivoSelecionado(caminho=arquivo_vpl, app_id="VPL")]
         resultado = analisador.analisar(selecao, "abc123")
-        assert resultado.identificador == "abc123"
-        # abc123 aparece em 2 das 3 linhas
+        assert resultado.identificador == "<CALL_ID_1>"
+        # abc123 aparece em 2 das 3 entradas e a fachada retorna a visão segura.
         assert len(resultado.linha_do_tempo) == 2
         assert "VPL" in resultado.entradas_por_aplicacao
         assert not resultado.erros
@@ -236,17 +242,18 @@ class TestCorrelacaoVplOrk:
     def test_linha_do_tempo_ordenada_por_tempo(
         self, analisador, arquivo_vpl, arquivo_ork
     ):
-        """A linha do tempo deve estar ordenada por carimbo de tempo."""
+        """A timeline nova deve usar apenas o instante UTC normalizado."""
         selecao = [
             ArquivoSelecionado(caminho=arquivo_vpl, app_id="VPL"),
             ArquivoSelecionado(caminho=arquivo_ork, app_id="ORK"),
         ]
         resultado = analisador.analisar(selecao, "abc123")
-        for i in range(len(resultado.linha_do_tempo) - 1):
-            e1 = resultado.linha_do_tempo[i]
-            e2 = resultado.linha_do_tempo[i + 1]
-            if e1.carimbo_de_tempo and e2.carimbo_de_tempo:
-                assert e1.carimbo_de_tempo <= e2.carimbo_de_tempo
+        instantes = [
+            entrada.timestamp_normalizado
+            for entrada in resultado.linha_do_tempo
+        ]
+        assert all(instante is not None for instante in instantes)
+        assert instantes == sorted(instantes)
 
 
 class TestReassociacao:

@@ -14,3 +14,12 @@ env/
 *.log
 *.gz
 .env
+
+# Dados sensiveis de producao - nunca versionar
+logs/
+curation.db
+
+
+# Fixtures sinteticas de teste (nao sao logs reais) - versionar
+!tests/fixtures/**/*.log
+!tests/fixtures/**/*.gz

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Validação Fase 2 - Call Analysis Dashboard{% endblock %}
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-8 col-lg-6">
+        <div class="card shadow">
+            <div class="card-body p-4">
+                <h2 class="card-title text-center mb-4">&#x1F9EA; Analisar (Fase 2)</h2>
+                <form action="/analyze-fase2" method="POST">
+                    <div class="mb-3">
+                        <label for="identificador" class="form-label">Identificador</label>
+                        <input type="text" class="form-control form-control-lg {% if error %}is-invalid{% endif %}"
+                               id="identificador" name="identificador"
+                               placeholder="Ex: identificador-do-cenario"
+                               value="{{ request.form.get('identificador', '') }}"
+                               maxlength="256" autofocus>
+                        {% if error %}
+                        <div class="invalid-feedback">{{ error }}</div>
+                        {% endif %}
+                        <div class="form-text">Texto livre (1 a 256 caracteres).</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="vpl_file" class="form-label">Arquivo VPL</label>
+                        <select class="form-select" id="vpl_file" name="vpl_file">
+                            <option value="">(nenhum)</option>
+                            {% for file in log_files %}
+                            <option value="{{ file }}" {% if request.form.get('vpl_file') == file %}selected{% endif %}>{{ file }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="ork_file" class="form-label">Arquivo ORK</label>
+                        <select class="form-select" id="ork_file" name="ork_file">
+                            <option value="">(nenhum)</option>
+                            {% for file in log_files %}
+                            <option value="{{ file }}" {% if request.form.get('ork_file') == file %}selected{% endif %}>{{ file }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Informe ao menos um dos arquivos (VPL ou ORK).</div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-lg w-100">Analisar (Fase 2)</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

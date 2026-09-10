@@ -1,0 +1,24 @@
+{
+  "fixture_id": "golden_candidate_structural_v1",
+  "origin": "synthetic",
+  "sanitizer_version": "1.0",
+  "label": "NAO_CLASSIFICADA",
+  "validation_date": "2025-01-15",
+  "approved_by": "<DOMAIN_OWNER_1>",
+  "approval_scope": "fixture_structure_only",
+  "candidate_kind": "structural",
+  "classification_status": "NAO_CLASSIFICADA",
+  "predicates": [],
+  "active_rule": null,
+  "asserts_real_success": false,
+  "artifacts": [
+    {
+      "path": "vpl.log",
+      "sha256": "f946ce681d452746c05bc71575fd853f98b49ef974d686b63b78e2e17791f6d6"
+    },
+    {
+      "path": "ork.log",
+      "sha256": "ddde397e19012e68807f358790a9ec76f51f3d609360396a1368649171df90eb"
+    }
+  ]
+}

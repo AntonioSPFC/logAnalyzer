@@ -3,16 +3,30 @@
 import pytest
 
 from log_analyzer.core.excecoes import (
-    ErroDoAnalisador,
     ErroDeArquivo,
+    ErroDeCatalogo,
+    ErroDeDecodificacao,
     ErroDeIdentificador,
+    ErroDeIntegridadeDaFonte,
     ErroDeRegistro,
+    ErroDeSanitizacao,
+    ErroDoAnalisador,
+    ErroTemporal,
 )
 from log_analyzer.core import (
     ErroDoAnalisador as ErroDoAnalisadorExported,
     ErroDeArquivo as ErroDeArquivoExported,
     ErroDeIdentificador as ErroDeIdentificadorExported,
     ErroDeRegistro as ErroDeRegistroExported,
+)
+
+
+NOVOS_ERROS = (
+    ErroDeDecodificacao,
+    ErroTemporal,
+    ErroDeCatalogo,
+    ErroDeSanitizacao,
+    ErroDeIntegridadeDaFonte,
 )
 
 
@@ -31,11 +45,20 @@ class TestHierarquiaDeHeranca:
     def test_erro_de_identificador_herda_de_erro_do_analisador(self):
         assert issubclass(ErroDeIdentificador, ErroDoAnalisador)
 
+    @pytest.mark.parametrize("classe_erro", NOVOS_ERROS)
+    def test_novos_erros_herdam_de_erro_do_analisador(self, classe_erro):
+        assert issubclass(classe_erro, ErroDoAnalisador)
+
     def test_captura_generica_com_erro_do_analisador(self):
         """Todas as exceções do analisador podem ser capturadas pela base."""
         for exc_class in (ErroDeRegistro, ErroDeArquivo, ErroDeIdentificador):
             with pytest.raises(ErroDoAnalisador):
                 raise exc_class("teste")
+
+    @pytest.mark.parametrize("classe_erro", NOVOS_ERROS)
+    def test_captura_generica_dos_novos_erros(self, classe_erro):
+        with pytest.raises(ErroDoAnalisador):
+            raise classe_erro()
 
 
 class TestErroDoAnalisador:
@@ -118,8 +141,115 @@ class TestErroDeIdentificador:
         assert erro.contexto["comprimento"] == 300
 
 
+class TestErrosComContextoSeguro:
+    """Testes dos contratos seguros adicionados na Fase 2."""
+
+    @pytest.mark.parametrize(
+        ("classe_erro", "codigo_padrao", "mensagem_segura"),
+        (
+            (ErroDeDecodificacao, "DECODE_ERROR", "Falha de decodificação da fonte."),
+            (ErroTemporal, "TEMPORAL_ERROR", "Falha na resolução temporal da entrada."),
+            (ErroDeCatalogo, "CATALOG_ERROR", "Falha no catálogo de regras."),
+            (
+                ErroDeSanitizacao,
+                "SANITIZATION_ERROR",
+                "Falha de sanitização; conteúdo suprimido.",
+            ),
+            (
+                ErroDeIntegridadeDaFonte,
+                "SOURCE_CHANGED",
+                "A integridade da fonte não pôde ser confirmada.",
+            ),
+        ),
+    )
+    def test_codigo_e_mensagem_padrao_constante(
+        self, classe_erro, codigo_padrao, mensagem_segura
+    ):
+        erro = classe_erro()
+
+        assert erro.codigo == codigo_padrao
+        assert erro.contexto == {"codigo": codigo_padrao}
+        assert erro.mensagem == mensagem_segura
+        assert str(erro) == mensagem_segura
+
+    @pytest.mark.parametrize("classe_erro", NOVOS_ERROS)
+    def test_contexto_contem_somente_codigo_token_e_posicao(self, classe_erro):
+        erro = classe_erro(
+            codigo="SAFE_FAILURE",
+            arquivo_token="<ARQUIVO_7>",
+            posicao=42,
+        )
+
+        assert erro.codigo == "SAFE_FAILURE"
+        assert erro.arquivo_token == "<ARQUIVO_7>"
+        assert erro.posicao == 42
+        assert erro.contexto == {
+            "codigo": "SAFE_FAILURE",
+            "arquivo_token": "<ARQUIVO_7>",
+            "posicao": 42,
+        }
+
+    @pytest.mark.parametrize("classe_erro", NOVOS_ERROS)
+    def test_contexto_opcional_nao_cria_chaves_vazias(self, classe_erro):
+        erro = classe_erro(codigo="SAFE_FAILURE")
+
+        assert erro.arquivo_token is None
+        assert erro.posicao is None
+        assert "arquivo_token" not in erro.contexto
+        assert "posicao" not in erro.contexto
+
+    @pytest.mark.parametrize("classe_erro", NOVOS_ERROS)
+    def test_mensagem_nao_interpola_contexto(self, classe_erro):
+        erro_padrao = classe_erro()
+        erro_contextualizado = classe_erro(
+            codigo="SAFE_FAILURE",
+            arquivo_token="<ARQUIVO_9>",
+            posicao=999,
+        )
+
+        assert str(erro_contextualizado) == str(erro_padrao)
+        assert "<ARQUIVO_9>" not in str(erro_contextualizado)
+        assert "999" not in str(erro_contextualizado)
+
+    @pytest.mark.parametrize(
+        ("argumento", "valor_sensivel"),
+        (
+            ("caminho", r"C:\dados\fonte.log"),
+            ("bytes_brutos", b"segredo-binario"),
+            ("identificador", "identificador-bruto-secreto"),
+            ("texto_bruto", "conteudo bruto secreto"),
+        ),
+    )
+    def test_campos_brutos_nao_sao_aceitos_nem_ecoados(
+        self, argumento, valor_sensivel
+    ):
+        with pytest.raises(TypeError) as exc_info:
+            ErroDeSanitizacao(**{argumento: valor_sensivel})
+
+        assert str(valor_sensivel) not in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        ("argumentos", "valor_sensivel"),
+        (
+            ({"codigo": r"C:\dados\fonte.log"}, r"C:\dados\fonte.log"),
+            ({"arquivo_token": r"C:\dados\fonte.log"}, r"C:\dados\fonte.log"),
+            ({"posicao": "conteudo bruto secreto"}, "conteudo bruto secreto"),
+        ),
+    )
+    def test_contexto_invalido_e_rejeitado_sem_eco(self, argumentos, valor_sensivel):
+        with pytest.raises(ValueError) as exc_info:
+            ErroDeDecodificacao(**argumentos)
+
+        assert valor_sensivel not in str(exc_info.value)
+
+    @pytest.mark.parametrize("posicao", (-1, True, 1.5))
+    def test_posicao_deve_ser_inteiro_nao_negativo(self, posicao):
+        with pytest.raises(ValueError, match="Posição segura inválida"):
+            ErroTemporal(posicao=posicao)
+
+
 class TestExportacao:
-    """Verifica que as exceções são corretamente exportadas de log_analyzer.core."""
+    """Verifica que as exceções legadas continuam exportadas por log_analyzer.core."""
 
     def test_exporta_erro_do_analisador(self):
         assert ErroDoAnalisadorExported is ErroDoAnalisador

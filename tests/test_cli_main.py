@@ -73,7 +73,10 @@ class TestMainArgumentParsing:
     def test_parses_app_id_and_path(self, capsys, tmp_path):
         # Create a dummy log file
         log_file = tmp_path / "test.log"
-        log_file.write_text("2024-01-01 10:00:00 INFO test-id some message\n")
+        log_file.write_text(
+            "2024-01-01 10:00:00.000 [INFO] modulo.c:1 "
+            "evento test-id\n"
+        )
 
         with patch.object(
             sys, "argv", ["log_analyzer", "test-id", f"VPL:{log_file}"]
@@ -82,7 +85,9 @@ class TestMainArgumentParsing:
             main()
 
         captured = capsys.readouterr()
-        assert "Resultado da análise para: test-id" in captured.out
+        assert "Resultado da análise para:" in captured.out
+        assert "test-id" not in captured.out + captured.err
+        assert str(log_file) not in captured.out + captured.err
 
     def test_parses_arg_without_colon_as_no_app_id(self, capsys, tmp_path):
         log_file = tmp_path / "test.log"
@@ -94,5 +99,7 @@ class TestMainArgumentParsing:
             main()
 
         captured = capsys.readouterr()
-        # Should run (will report error about no app associated)
-        assert "Resultado da análise para: search-term" in captured.out
+        # A associação sem app_id permanece aceita, mas a saída é sanitizada.
+        assert "Resultado da análise para:" in captured.out
+        assert "search-term" not in captured.out + captured.err
+        assert str(log_file) not in captured.out + captured.err

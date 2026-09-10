@@ -149,3 +149,390 @@ class TestFilterLines:
 
         assert len(result) == 1
         assert "lower" in result[0]
+
+
+class TestDecodificarPrompt:
+    """Tests for CallLogParser._decodificar_prompt (MAS prompt decoding)."""
+
+    def test_converts_hash012_to_newline(self):
+        """The literal '#012' syslog marker becomes a real newline."""
+        result = CallLogParser._decodificar_prompt("linha1#012#012linha2")
+        assert result == "linha1\n\nlinha2"
+
+    def test_fixes_mojibake(self):
+        """Double-encoded mojibake is corrected to proper UTF-8."""
+        # 'Você é' double-encoded shows up as 'VocÃª Ã©' in the logs.
+        mojibake = "VocÃª Ã©"
+        result = CallLogParser._decodificar_prompt(mojibake)
+        assert result == "Você é"
+
+    def test_fixes_mojibake_and_newlines_together(self):
+        """Both transformations apply on the same string."""
+        mojibake = "VocÃª Ã© responsÃ¡vel#012#012Sempre responda"
+        result = CallLogParser._decodificar_prompt(mojibake)
+        assert result == "Você é responsável\n\nSempre responda"
+
+    def test_pure_ascii_is_not_corrupted(self):
+        """Plain ASCII text passes through unchanged (idempotent/safe)."""
+        text = "Classifier prompt with only ASCII 123 and #012 markers"
+        result = CallLogParser._decodificar_prompt(text)
+        # '#012' still converted, rest untouched
+        assert result == "Classifier prompt with only ASCII 123 and \n markers"
+
+    def test_already_valid_utf8_without_hash012_unchanged(self):
+        """Valid UTF-8 without markers is preserved (no corruption)."""
+        text = "texto simples sem marcadores"
+        assert CallLogParser._decodificar_prompt(text) == text
+
+
+class TestSystemPromptExtraction:
+    """Tests for MAS system prompt extraction in _parse_lines (ORK format)."""
+
+    CALL_ID = "0019035e305026e7"
+
+    def _ork_line(self, message: str) -> str:
+        """Build a synthetic ORK syslog line with a valid ISO timestamp."""
+        return (
+            f"2026-06-30T15:44:12.068-03:00 ip-10-179-20-88 "
+            f"olos_ai_orchestrator[1604]: INFO - app.assistants.phi_state_choser - "
+            f"[User 11111111-2222-3333-4444-555555555555][CallId: {self.CALL_ID}] {message}"
+        )
+
+    def test_extracts_classifier_and_finalizer_prompts(self, tmp_path):
+        """Both prompts are extracted, mojibake fixed, #012 converted."""
+        lines = [
+            self._ork_line(
+                "[MAS] Classifier prompt: VocÃª Ã© responsÃ¡vel#012#012Sempre responda"
+            ),
+            self._ork_line(
+                "[MAS] Finalizer prompt: # Papel#012#012VocÃª Ã© um agente"
+            ),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        assert result.classifier_prompt == "Você é responsável\n\nSempre responda"
+        assert result.finalizer_prompt == "# Papel\n\nVocê é um agente"
+
+    def test_keeps_first_occurrence_only(self, tmp_path):
+        """When a prompt repeats, only the first occurrence is kept."""
+        lines = [
+            self._ork_line("[MAS] Classifier prompt: primeiro#012conteudo"),
+            self._ork_line("[MAS] Classifier prompt: segundo#012conteudo"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        assert result.classifier_prompt == "primeiro\nconteudo"
+
+    def test_case_insensitive_label(self, tmp_path):
+        """Prompt labels match case-insensitively."""
+        lines = [
+            self._ork_line("[MAS] CLASSIFIER PROMPT: texto"),
+            self._ork_line("[MAS] finalizer prompt: outro"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        assert result.classifier_prompt == "texto"
+        assert result.finalizer_prompt == "outro"
+
+    def test_no_prompt_leaves_fields_none(self, tmp_path):
+        """When no MAS prompt is present, prompt fields are None and parsing
+        still succeeds."""
+        lines = [
+            self._ork_line("General paths loaded"),
+            self._ork_line("Resposta do assistente: Olá, tudo bem?"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        assert result.classifier_prompt is None
+        assert result.finalizer_prompt is None
+        # Rest of parsing unaffected: the bot response was captured.
+        assert any(m.text == "Olá, tudo bem?" for m in result.conversation)
+
+
+class TestLLMStageDetermination:
+    """Tests for LLM stage determination extraction (phi_state_choser).
+
+    Captures the canonical "Parsed stage: '<full_name>'" log line emitted by
+    the ORK phi_state_choser logger and turns it into a STAGE_TRANSITION event
+    tagged with source == 'llm_stage'.
+    """
+
+    CALL_ID = "0019035e305026e7"
+
+    EventType = _call_parser.EventType
+
+    def _ork_line(self, message: str) -> str:
+        """Build a synthetic ORK syslog line with a valid ISO timestamp."""
+        return (
+            f"2026-06-30T15:44:12.068-03:00 ip-10-179-20-88 "
+            f"olos_ai_orchestrator[1604]: INFO - app.assistants.phi_state_choser - "
+            f"[User 11111111-2222-3333-4444-555555555555][CallId: {self.CALL_ID}] {message}"
+        )
+
+    def test_parsed_stage_creates_stage_transition_event(self, tmp_path):
+        """A 'Parsed stage' line yields a STAGE_TRANSITION with llm_stage metadata."""
+        full = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-ask_if_will_pay"
+        lines = [
+            self._ork_line(f"Parsed stage: '{full}'"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        stage_events = [
+            e for e in result.events
+            if e.event_type == self.EventType.STAGE_TRANSITION
+        ]
+        assert len(stage_events) == 1
+        ev = stage_events[0]
+        assert ev.metadata["to"] == "ask_if_will_pay"
+        assert ev.metadata["from"] == ""
+        assert ev.metadata["source"] == "llm_stage"
+        assert ev.metadata["full"] == full
+
+    def test_multiple_determinations_preserve_order(self, tmp_path):
+        """Multiple 'Parsed stage' lines produce ordered STAGE_TRANSITION events."""
+        full1 = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-negociacao_da_divida"
+        full2 = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-ask_if_will_pay"
+        lines = [
+            self._ork_line(f"Parsed stage: '{full1}'"),
+            self._ork_line(f"Parsed stage: '{full2}'"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        stage_events = [
+            e for e in result.events
+            if e.event_type == self.EventType.STAGE_TRANSITION
+            and e.metadata.get("source") == "llm_stage"
+        ]
+        assert [e.metadata["to"] for e in stage_events] == [
+            "negociacao_da_divida",
+            "ask_if_will_pay",
+        ]
+
+    def test_lines_without_parsed_stage_produce_no_llm_stage_event(self, tmp_path):
+        """Lines lacking 'Parsed stage' do not create llm_stage events."""
+        lines = [
+            self._ork_line(
+                "Stage response from google/gemma-3-4b-it (57 chars): "
+                "FastFlowCloud-ADA-Cob-Generic-Company-CPF-ask_if_will_pay"
+            ),
+            self._ork_line(
+                "Stage found directly in response: "
+                "'FastFlowCloud-ADA-Cob-Generic-Company-CPF-ask_if_will_pay'"
+            ),
+            self._ork_line(
+                "=== Total google/gemma-3-4b-it stage determination time: 921.99ms ==="
+            ),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        llm_stage_events = [
+            e for e in result.events
+            if e.event_type == self.EventType.STAGE_TRANSITION
+            and e.metadata.get("source") == "llm_stage"
+        ]
+        assert llm_stage_events == []
+
+    def test_general_parsing_still_works_with_parsed_stage_present(self, tmp_path):
+        """Adding a Parsed stage line does not break other extractions."""
+        full = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-ask_if_will_pay"
+        lines = [
+            self._ork_line("Resposta do assistente: Olá, tudo bem?"),
+            self._ork_line(f"Parsed stage: '{full}'"),
+            self._ork_line("General paths loaded"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        # Bot response conversation still captured.
+        assert any(m.text == "Olá, tudo bem?" for m in result.conversation)
+        # LLM stage event present exactly once.
+        llm_stage_events = [
+            e for e in result.events
+            if e.event_type == self.EventType.STAGE_TRANSITION
+            and e.metadata.get("source") == "llm_stage"
+        ]
+        assert len(llm_stage_events) == 1
+        assert llm_stage_events[0].metadata["to"] == "ask_if_will_pay"
+
+
+class TestStageSequence:
+    """Tests for the consolidated CallData.stage_sequence field.
+
+    The parser accumulates the short name of every LLM-decided stage
+    ("Parsed stage: '<full_name>'") in chronological order, preserving
+    consecutive repetitions, so the dashboard card can render the full
+    progression of stages.
+    """
+
+    CALL_ID = "0019035e305026e7"
+
+    EventType = _call_parser.EventType
+
+    def _ork_line(self, message: str) -> str:
+        """Build a synthetic ORK syslog line with a valid ISO timestamp."""
+        return (
+            f"2026-06-30T15:44:12.068-03:00 ip-10-179-20-88 "
+            f"olos_ai_orchestrator[1604]: INFO - app.assistants.phi_state_choser - "
+            f"[User 11111111-2222-3333-4444-555555555555][CallId: {self.CALL_ID}] {message}"
+        )
+
+    def test_stage_sequence_collects_short_names_in_order(self, tmp_path):
+        """Multiple 'Parsed stage' lines populate stage_sequence with short names."""
+        full1 = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-negociacao_da_divida"
+        full2 = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-ask_if_will_pay"
+        lines = [
+            self._ork_line(f"Parsed stage: '{full1}'"),
+            self._ork_line(f"Parsed stage: '{full2}'"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        assert result.stage_sequence == [
+            "negociacao_da_divida",
+            "ask_if_will_pay",
+        ]
+
+    def test_stage_sequence_preserves_consecutive_repetitions(self, tmp_path):
+        """The same stage appearing twice in a row is kept faithfully."""
+        full1 = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-negociacao_da_divida"
+        full2 = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-ask_if_will_pay"
+        lines = [
+            self._ork_line(f"Parsed stage: '{full1}'"),
+            self._ork_line(f"Parsed stage: '{full1}'"),
+            self._ork_line(f"Parsed stage: '{full2}'"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        assert result.stage_sequence == [
+            "negociacao_da_divida",
+            "negociacao_da_divida",
+            "ask_if_will_pay",
+        ]
+
+    def test_stage_sequence_empty_without_parsed_stage(self, tmp_path):
+        """No 'Parsed stage' lines yields an empty stage_sequence."""
+        lines = [
+            self._ork_line("Resposta do assistente: Olá, tudo bem?"),
+            self._ork_line("General paths loaded"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        assert result.stage_sequence == []
+
+    def test_stage_transition_timeline_event_still_created(self, tmp_path):
+        """The STAGE_TRANSITION llm_stage badge is not regressed by stage_sequence."""
+        full = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-ask_if_will_pay"
+        lines = [
+            self._ork_line(f"Parsed stage: '{full}'"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        llm_stage_events = [
+            e for e in result.events
+            if e.event_type == self.EventType.STAGE_TRANSITION
+            and e.metadata.get("source") == "llm_stage"
+        ]
+        assert len(llm_stage_events) == 1
+        assert llm_stage_events[0].metadata["to"] == "ask_if_will_pay"
+        # And the consolidated sequence mirrors the timeline decision.
+        assert result.stage_sequence == ["ask_if_will_pay"]
+
+
+class TestAssistantMessageStage:
+    """Tests for tagging assistant conversation messages with the current stage.
+
+    The parser tracks the last LLM-decided stage ("Parsed stage: '<full>'")
+    seen so far and attaches its short name to each subsequent assistant
+    ("Resposta do assistente:") message. Customer messages keep stage=None.
+    """
+
+    CALL_ID = "0019035e305026e7"
+
+    Speaker = _call_parser.Speaker
+
+    def _ork_line(self, message: str) -> str:
+        """Build a synthetic ORK syslog line with a valid ISO timestamp."""
+        return (
+            f"2026-06-30T15:44:12.068-03:00 ip-10-179-20-88 "
+            f"olos_ai_orchestrator[1604]: INFO - app.assistants.phi_state_choser - "
+            f"[User 11111111-2222-3333-4444-555555555555][CallId: {self.CALL_ID}] {message}"
+        )
+
+    def test_assistant_message_gets_current_stage(self, tmp_path):
+        """Assistant response is tagged with the last 'Parsed stage' before it."""
+        full = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-negociacao_da_divida"
+        lines = [
+            self._ork_line(f"Parsed stage: '{full}'"),
+            self._ork_line("Resposta do assistente: Vamos negociar sua dívida?"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        assistant_msgs = [
+            m for m in result.conversation if m.speaker == self.Speaker.ASSISTANT
+        ]
+        assert len(assistant_msgs) == 1
+        assert assistant_msgs[0].stage == "negociacao_da_divida"
+
+    def test_assistant_message_before_any_stage_has_none(self, tmp_path):
+        """An assistant response before any 'Parsed stage' line has stage=None."""
+        full = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-negociacao_da_divida"
+        lines = [
+            self._ork_line("Resposta do assistente: Olá, tudo bem?"),
+            self._ork_line(f"Parsed stage: '{full}'"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        assistant_msgs = [
+            m for m in result.conversation if m.speaker == self.Speaker.ASSISTANT
+        ]
+        assert len(assistant_msgs) == 1
+        assert assistant_msgs[0].stage is None
+
+    def test_customer_message_has_none_stage(self, tmp_path):
+        """Customer (ASR) messages never receive a stage, even after a stage line."""
+        full = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-negociacao_da_divida"
+        lines = [
+            self._ork_line(f"Parsed stage: '{full}'"),
+            self._ork_line("BUFFER LIMPO transcrição='quero pagar'"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        customer_msgs = [
+            m for m in result.conversation if m.speaker == self.Speaker.CUSTOMER
+        ]
+        assert len(customer_msgs) == 1
+        assert customer_msgs[0].text == "quero pagar"
+        assert customer_msgs[0].stage is None
+
+    def test_stage_changes_between_assistant_responses(self, tmp_path):
+        """Each assistant response reflects the stage in effect at its time."""
+        full1 = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-identificacao_do_cliente"
+        full2 = "FastFlowCloud-ADA-Cob-Generic-Company-CPF-negociacao_da_divida"
+        lines = [
+            self._ork_line(f"Parsed stage: '{full1}'"),
+            self._ork_line("Resposta do assistente: Confirma seu CPF?"),
+            self._ork_line(f"Parsed stage: '{full2}'"),
+            self._ork_line("Resposta do assistente: Vamos negociar?"),
+        ]
+        parser = CallLogParser(str(tmp_path))
+        result = parser._parse_lines(self.CALL_ID, lines)
+
+        assistant_msgs = [
+            m for m in result.conversation if m.speaker == self.Speaker.ASSISTANT
+        ]
+        assert len(assistant_msgs) == 2
+        assert assistant_msgs[0].stage == "identificacao_do_cliente"
+        assert assistant_msgs[1].stage == "negociacao_da_divida"

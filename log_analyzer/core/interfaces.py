@@ -6,9 +6,31 @@ apenas dessas abstrações, nunca de implementações concretas.
 """
 
 from abc import ABC, abstractmethod
-from typing import Iterable
+from enum import Enum
+from typing import Iterable, Protocol, runtime_checkable
 
 from log_analyzer.core.modelos import Categoria, EntradaDeLog
+
+
+class TipoInicio(Enum):
+    """Classificação trivalente do início de uma linha física."""
+
+    CABECALHO_VALIDO = "cabecalho_valido"
+    CABECALHO_APARENTE_INVALIDO = "cabecalho_aparente_invalido"
+    CONTINUACAO = "continuacao"
+
+
+@runtime_checkable
+class Parser_de_Bloco(Protocol):
+    """Capacidade opcional para parsers que processam blocos multiline."""
+
+    def detectar_inicio(self, linha: "LinhaFisica") -> TipoInicio:
+        """Classifica uma linha como início válido, aparente inválido ou continuação."""
+        ...
+
+    def interpretar_bloco(self, bloco: "BlocoLog") -> "EntradaIndexada":
+        """Interpreta um bloco lógico previamente agrupado."""
+        ...
 
 
 class Padrao_de_Analise(ABC):

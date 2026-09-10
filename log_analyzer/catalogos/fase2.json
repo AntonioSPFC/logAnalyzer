@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "catalog_version": "FASE2_INITIAL_1",
+  "coverage": {
+    "labeled_successes": 1,
+    "labeled_errors": 0,
+    "statement": "1 cenário de sucesso; 0 cenários de erro",
+    "gaps": [
+      {
+        "gap_id": "ADDITIONAL_LABELED_SUCCESS_AND_ERROR_SAMPLES",
+        "description": "Amostras adicionais rotuladas de sucesso e erro são necessárias para generalizar padrões além do cenário atualmente coberto."
+      },
+      {
+        "gap_id": "GOLDEN_CANDIDATE_CLASSIFICATION_CONDITIONS_PENDING",
+        "description": "As condições necessárias e suficientes do candidato estrutural ainda não foram definidas nem aprovadas para classificação."
+      }
+    ]
+  },
+  "fixtures": [
+    {
+      "fixture_id": "golden_candidate_structural_v1",
+      "sha256": "e01c6bddfd964a78d6232a5c700f086a0232d0976990b47149b5ef11198c1e79",
+      "label": "NAO_CLASSIFICADA",
+      "sanitized_origin": "synthetic",
+      "validated_at": "2025-01-15T00:00:00+00:00",
+      "validated_by": "<DOMAIN_OWNER_1>"
+    }
+  ],
+  "rules": []
+}

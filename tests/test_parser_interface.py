@@ -201,6 +201,52 @@ class TestParserDeAplicacaoInterface:
         assert resultado[0].texto_original == "linha gen 1"
         assert resultado[1].texto_original == "linha gen 2"
 
+    def test_tipo_inicio_declara_exatamente_os_tres_estados(self):
+        """A detecção por bloco usa somente os três estados especificados."""
+        from log_analyzer.core.interfaces import TipoInicio
+
+        assert tuple((estado.name, estado.value) for estado in TipoInicio) == (
+            ("CABECALHO_VALIDO", "cabecalho_valido"),
+            ("CABECALHO_APARENTE_INVALIDO", "cabecalho_aparente_invalido"),
+            ("CONTINUACAO", "continuacao"),
+        )
+
+    def test_parser_de_bloco_e_runtime_checkable_e_opcional(self):
+        """Só objetos com a capacidade adicional satisfazem o protocolo estrutural."""
+        from log_analyzer.core.interfaces import Parser_de_Bloco, TipoInicio
+
+        class ParserSomenteLinha(Parser_de_Aplicacao):
+            @property
+            def niveis_de_severidade(self) -> frozenset[str]:
+                return frozenset({"INFO"})
+
+            def interpretar_entrada(self, texto: str) -> EntradaDeLog:
+                return EntradaDeLog(
+                    texto_original=texto,
+                    aplicacao="TEST",
+                    ordem_de_leitura=0,
+                    interpretada=False,
+                )
+
+            def imprimir_entrada(self, entrada: EntradaDeLog) -> str:
+                return entrada.texto_original
+
+        class ParserEstruturalDeBloco:
+            def detectar_inicio(self, linha: object) -> TipoInicio:
+                return TipoInicio.CABECALHO_VALIDO
+
+            def interpretar_bloco(self, bloco: object) -> object:
+                return bloco
+
+        parser_line_based = ParserSomenteLinha()
+
+        assert not isinstance(parser_line_based, Parser_de_Bloco)
+        assert isinstance(ParserEstruturalDeBloco(), Parser_de_Bloco)
+        assert [
+            entrada.texto_original
+            for entrada in parser_line_based.interpretar_arquivo(iter(("a", "b")))
+        ] == ["a", "b"]
+
     def test_abstract_methods_set(self):
         """A interface declara exatamente os métodos abstratos esperados."""
         esperados = {"niveis_de_severidade", "interpretar_entrada", "imprimir_entrada"}

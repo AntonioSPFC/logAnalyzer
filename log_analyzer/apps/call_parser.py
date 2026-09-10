@@ -33,6 +33,11 @@ class EventType(Enum):
     CATEGORIZER_DECISION = "categorizer_decision"
     TTS_GENERATION = "tts_generation"
     TOOL_CALL = "tool_call"
+    STAGING_DECISION = "staging_decision"
+    FINALIZE_DECISION = "finalize_decision"
+    BARGE_IN = "barge_in"
+    FILLER = "filler"
+    VOICE_DETECTION = "voice_detection"
     ERROR = "error"
     OTHER = "other"
 
@@ -61,6 +66,11 @@ class ConversationMessage:
     timestamp: datetime
     speaker: Speaker
     text: str
+    # Short name of the LLM-decided stage in effect when an assistant message
+    # was produced. Added last with a default so existing positional
+    # construction (timestamp, speaker, text) keeps working. None for customer
+    # messages and for flows without stage tracking (e.g. VPL).
+    stage: str | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +132,9 @@ class CallData:
     # Call configuration
     assistant_name: str | None
     tts_supplier: str | None
+    tts_voice: str | None
+    tts_voice_id: str | None
+    tts_model_id: str | None
     vpl_ip: str | None
     ork_ip: str | None
     kamailio_ip: str | None
@@ -141,11 +154,18 @@ class CallData:
     audio_repetitions: list[AudioRepetition]
     missing_audio_files: list[str]
     hangup_reason: str | None
+    disposition_description: str | None
     error_entries: list[str]
     # Timing
     start_time: datetime | None
     end_time: datetime | None
     raw_mailing_data: dict | None
+    # System prompts (MAS) - captured from ORK phi_state_choser logs
+    classifier_prompt: str | None = field(default=None)
+    finalizer_prompt: str | None = field(default=None)
+    # Sequence of LLM-decided stages (short names), in chronological order.
+    # Includes consecutive repetitions to stay faithful to the log.
+    stage_sequence: list[str] = field(default_factory=list)
 
 
 import ast
@@ -199,7 +219,9 @@ class CallLogParser:
 
         files = []
         for f in os.listdir(self._log_directory):
-            if f.endswith('.log') or 'olos-ai-orchestrator' in f:
+            # Match: .log files, .gz files, olos-ai-orchestrator files,
+            # and rotated logs like ecos.log.2026-08-07-10-54-52.1
+            if f.endswith('.log') or f.endswith('.gz') or 'olos-ai-orchestrator' in f or '.log.' in f:
                 files.append(os.path.join(self._log_directory, f))
 
         return sorted(files, reverse=True)
@@ -247,6 +269,9 @@ class CallLogParser:
     _RE_ASR = re.compile(r"BUFFER LIMPO.*transcrição='([^']*)'")
     _RE_BOT_RESPONSE = re.compile(r"Resposta do assistente: (.+)")
     _RE_TRANSITION = re.compile(r"Transitioning from '([^']+)' to '([^']+)'")
+    # LLM stage determination (phi_state_choser): captures the decided stage
+    # from the canonical "Parsed stage: '<full_name>'" log line.
+    _RE_PARSED_STAGE = re.compile(r"Parsed stage:\s*'([^']+)'")
     _RE_CATEGORIZER_DECISION = re.compile(r"Opção escolhida: (.+), Confiança: ([\d.]+)")
     _RE_TTS_LATENCY = re.compile(r"First ElevenLabs chunk received - latency: (\d+) ms")
     _RE_CATEGORIZER_LATENCY = re.compile(r"categorizer_client_call took ([\d.]+)ms")
@@ -262,6 +287,12 @@ class CallLogParser:
     _RE_TOOL_CALL_PROCESSING = re.compile(r"Processing tool call: (\w+)")
     _RE_TOOL_CALL_SECOND = re.compile(r"SENDING MESSAGE FOR SECOND CALL \(TOOL CALL\): (.+)")
     _RE_STAGE_NAME = re.compile(r'-([a-z][a-z_]+)$')
+
+    # MAS system prompt pattern (phi_state_choser): captures Classifier/Finalizer
+    # prompt content from the label up to end of line.
+    _RE_MAS_PROMPT = re.compile(
+        r"\[MAS\]\s*(Classifier|Finalizer)\s+prompt:\s*(.*)$", re.IGNORECASE
+    )
 
     # Session summary sub-patterns
     _RE_SS_LLM = re.compile(
@@ -302,6 +333,31 @@ class CallLogParser:
             message = m.group(2).strip()
             return f"{level} - {message}" if message else level
         return line
+
+    @staticmethod
+    def _decodificar_prompt(texto: str) -> str:
+        """Decode a MAS system prompt for display.
+
+        1. Replaces the literal syslog newline sequence ``#012`` with real
+           newlines.
+        2. Fixes double-encoding mojibake (e.g. ``VocÃª Ã©`` -> ``Você é``) by
+           re-interpreting the text as latin-1 bytes decoded as utf-8. If that
+           fails, the original text is returned unchanged.
+
+        ``#012`` is pure ASCII, so it is unaffected by the latin-1/utf-8
+        round-trip regardless of ordering; the newline substitution is applied
+        first for clarity.
+        """
+        # (a) Convert literal '#012' syslog newline markers into real newlines.
+        texto = texto.replace("#012", "\n")
+
+        # (b) Fix mojibake from double-encoding. ASCII-only text is a no-op.
+        try:
+            texto = texto.encode("latin-1").decode("utf-8")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            pass
+
+        return texto
 
     @staticmethod
     def _extract_stage_name(full_name: str) -> str:
@@ -352,6 +408,292 @@ class CallLogParser:
             categorizer_calls=int(cat_m.group(1)),
         )
 
+    @staticmethod
+    def _detect_vpl_format(lines: list[str]) -> bool:
+        """Detect if lines are from VPL (FreeSWITCH) format."""
+        for line in lines[:10]:
+            if 'sofia/external/' in line or 'jsmain.cpp' in line or 'mod_sofia' in line or 'switch_core' in line:
+                return True
+        return False
+
+    def _parse_vpl_lines(self, call_id: str, lines: list[str]) -> CallData:
+        """Parse VPL (FreeSWITCH) format log lines."""
+        import json as json_mod
+
+        customer_name = None
+        cpf = None
+        phone = None
+        product = None
+        company = None
+        assistant_name = None
+        debt_total = None
+        debt_discount = None
+        debt_due_date = None
+        days_overdue = None
+        installments_overdue = None
+        raw_mailing_data = None
+        tts_supplier = None
+        tts_voice = None
+        tts_voice_id = None
+        tts_model_id = None
+        vpl_ip = None
+        ork_ip = None
+        kamailio_ip = None
+        ai_models = []
+        events = []
+        conversation = []
+        tts_latencies = []
+        categorizer_latencies = []
+        cache_hits = 0
+        cache_misses = 0
+        session_summary = None
+        no_voice_timeouts = 0
+        audio_repetitions = []
+        missing_audio_files = []
+        hangup_reason = None
+        disposition_description = None
+        error_entries = []
+        start_time = None
+        end_time = None
+
+        # VPL timestamp pattern: "2026-08-03 10:00:36.756713"
+        re_vpl_ts = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)')
+
+        for line in lines:
+            # Parse timestamp
+            ts = None
+            ts_match = re_vpl_ts.search(line)
+            if ts_match:
+                try:
+                    ts = datetime.strptime(ts_match.group(1)[:23], '%Y-%m-%d %H:%M:%S.%f')
+                except ValueError:
+                    pass
+
+            if ts:
+                if start_time is None or ts < start_time:
+                    start_time = ts
+                if end_time is None or ts > end_time:
+                    end_time = ts
+
+            # Extract Kamailio IP from sofia URI
+            if kamailio_ip is None and f'{call_id}@' in line:
+                km = re.search(rf'{call_id}@([\d.]+)', line)
+                if km:
+                    kamailio_ip = km.group(1)
+
+            # Extract VPL IP
+            if vpl_ip is None and '[x-way-ip]=' in line:
+                m = re.search(r'\[x-way-ip\]=\[([\d.]+)\]', line)
+                if m:
+                    vpl_ip = m.group(1)
+
+            # Extract ORK IP
+            if ork_ip is None and '[ork_ip]=' in line:
+                m = re.search(r'\[ork_ip\]=\[([\d.]+)\]', line)
+                if m:
+                    ork_ip = m.group(1)
+
+            # Extract mailing data from MailingData or WaySchInfo JSON
+            if raw_mailing_data is None and ('MailingData:' in line or 'WaySchInfo:' in line):
+                m = re.search(r'(?:MailingData|WaySchInfo): ({.+})', line)
+                if m:
+                    try:
+                        data = json_mod.loads(m.group(1))
+                        raw_mailing_data = data
+                        customer_name = data.get('Nome') or data.get('name')
+                        cpf = data.get('CPF') or data.get('CustomerId')
+                        phone = data.get('OriginalPhoneNumber')
+                        product = data.get('Produto') or data.get('produto')
+                        company = data.get('empresa')
+                        assistant_name = data.get('assistente')
+                        debt_total = data.get('Valor_Atualizado') or data.get('Valor')
+                        debt_discount = data.get('Valor_Desconto')
+                        debt_due_date = data.get('Vencimento')
+                        days_overdue = data.get('Dias_Atraso')
+                        tts_supplier = data.get('WayEngine') or tts_supplier
+                        tts_voice = data.get('WayVoice') or tts_voice
+                    except (json_mod.JSONDecodeError, ValueError):
+                        pass
+
+            # Extract conversation from adaConversation JSON (keep the LAST entry which has full history)
+            if 'adaConversation:' in line:
+                m = re.search(r'adaConversation: (\[.+\])', line)
+                if m:
+                    try:
+                        conv_data = json_mod.loads(m.group(1))
+                        conversation = []  # Clear - we want the LAST (most complete) entry
+                        for turn in conv_data:
+                            if turn.get('user') and ts:
+                                conversation.append(ConversationMessage(
+                                    timestamp=ts, speaker=Speaker.CUSTOMER, text=turn['user']
+                                ))
+                            if turn.get('assistant') and ts:
+                                conversation.append(ConversationMessage(
+                                    timestamp=ts, speaker=Speaker.ASSISTANT, text=turn['assistant']
+                                ))
+                    except (json_mod.JSONDecodeError, ValueError):
+                        pass
+
+            # Extract ASR + Bot response from detected-speech JSON bodies
+            if 'detected-speech' in line or '"asr_transcription"' in line:
+                m = re.search(r'parsedBody: ({.+})', line)
+                if m:
+                    try:
+                        body = json_mod.loads(m.group(1))
+                        asr_text = body.get('asr_transcription', '')
+                        bot_text = body.get('ai_text_to_vocalize', '')
+                        milestone = body.get('ai_milestone', '')
+
+                        if asr_text and ts:
+                            events.append(CallEvent(
+                                timestamp=ts, event_type=EventType.ASR_TRANSCRIPTION, content=asr_text
+                            ))
+                        if bot_text and ts:
+                            events.append(CallEvent(
+                                timestamp=ts, event_type=EventType.BOT_RESPONSE, content=bot_text
+                            ))
+                        if milestone and ts:
+                            stage_name = self._extract_stage_name(milestone)
+                            events.append(CallEvent(
+                                timestamp=ts, event_type=EventType.STAGE_TRANSITION,
+                                content=f"→ {stage_name}",
+                                metadata={"to": stage_name, "from": ""}
+                            ))
+
+                        # Extract TTS supplier
+                        if not tts_supplier:
+                            tts_supplier = 'elevenlabs' if 'elevenlabs' in line else None
+
+                        # Extract AI model info
+                        ai_sys = body.get('ai_system', '')
+                        ai_mod = body.get('ai_model', '')
+                        if ai_sys and ai_mod and not ai_models:
+                            ai_models.append(AIModelInfo(ai_type=ai_sys, model_name=ai_mod))
+                    except (json_mod.JSONDecodeError, ValueError):
+                        pass
+
+            # Extract disposition
+            if 'callDisposition [dispositionId:' in line:
+                m = re.search(r'dispositionId: (\d+)', line)
+                if m:
+                    hangup_reason = f"disposition_{m.group(1)}"
+
+            # Extract disposition description from callDisposition JSON
+            if disposition_description is None and 'callDisposition:' in line and 'navigationDescription' in line:
+                disp_m = re.search(r'"navigationDescription":\s*"([^"]+)"', line)
+                if disp_m:
+                    disposition_description = disp_m.group(1).encode().decode('unicode_escape')
+
+            # Extract hangup cause
+            if 'Hangup' in line and 'NORMAL_CLEARING' in line:
+                hangup_reason = 'NORMAL_CLEARING'
+            elif 'Hangup' in line:
+                m = re.search(r'\[(\w+)\]$', line.strip())
+                if m:
+                    hangup_reason = m.group(1)
+
+            # Errors - catch [ERR] level and real ERROR messages (not JSON "error":"" fields)
+            if '[ERR]' in line or (' ERROR: ' in line and 'CALLID:' in line and '"error"' not in line):
+                error_entries.append(line)
+                if ts:
+                    events.append(CallEvent(timestamp=ts, event_type=EventType.ERROR, content=self._clean_vpl_line(line)))
+
+            # TTS supplier from speak lines
+            if tts_supplier is None and 'rest:elevenlabs' in line:
+                tts_supplier = 'elevenlabs'
+
+            # Extract TTS voice name from promptVoice line
+            if tts_voice is None and 'promptVoice:' in line:
+                vm = re.search(r'promptVoice: (\w+)', line)
+                if vm:
+                    tts_voice = vm.group(1)
+
+            # Extract ElevenLabs voice_id and model_id from tts_payload in getMASFlowIInfo response
+            if tts_voice_id is None and 'tts_payload' in line and 'voice_id' in line:
+                vid_m = re.search(r'"voice_id":\s*\["([^"]+)"\]', line)
+                if vid_m:
+                    tts_voice_id = vid_m.group(1)
+                mid_m = re.search(r'"model_id":\s*"([^"]+)"', line)
+                if mid_m:
+                    tts_model_id = mid_m.group(1)
+
+            # Add all lines with timestamps to timeline (cleaned)
+            if ts:
+                event_type_final = EventType.OTHER
+                content = self._clean_vpl_line(line)
+
+                # Skip if already added as a specific event type above
+                if '[ERR]' not in line and 'parsedBody:' not in line and not (' ERROR: ' in line and 'CALLID:' in line and '"error"' not in line):
+                    events.append(CallEvent(
+                        timestamp=ts, event_type=event_type_final, content=content
+                    ))
+
+        return CallData(
+            call_id=call_id,
+            customer_name=customer_name,
+            cpf=cpf,
+            phone=phone,
+            product=product,
+            company=company,
+            debt_total=debt_total,
+            debt_discount=debt_discount,
+            debt_due_date=debt_due_date,
+            days_overdue=days_overdue,
+            installments_overdue=installments_overdue,
+            assistant_name=assistant_name,
+            tts_supplier=tts_supplier,
+            tts_voice=tts_voice,
+            tts_voice_id=tts_voice_id,
+            tts_model_id=tts_model_id,
+            vpl_ip=vpl_ip,
+            ork_ip=ork_ip,
+            kamailio_ip=kamailio_ip,
+            ai_models=ai_models,
+            events=events,
+            conversation=conversation,
+            tts_latencies=tts_latencies,
+            categorizer_latencies=categorizer_latencies,
+            cache_hits=cache_hits,
+            cache_misses=cache_misses,
+            session_summary=session_summary,
+            no_voice_timeouts=no_voice_timeouts,
+            audio_repetitions=audio_repetitions,
+            missing_audio_files=missing_audio_files,
+            hangup_reason=hangup_reason,
+            disposition_description=disposition_description,
+            error_entries=error_entries,
+            start_time=start_time,
+            end_time=end_time,
+            raw_mailing_data=raw_mailing_data,
+            classifier_prompt=None,
+            finalizer_prompt=None,
+            stage_sequence=[],
+        )
+
+    @staticmethod
+    def _clean_vpl_line(line: str) -> str:
+        """Clean VPL log line for display - remove UUID prefix and timestamp."""
+        # VPL lines often start with UUID or timestamp
+        # Pattern: "UUID TIMESTAMP PERCENT [LEVEL] module message"
+        # or: "TIMESTAMP PERCENT [LEVEL] module message"
+        m = re.match(
+            r'^(?:[0-9a-f-]{36}\s+)?'  # optional UUID
+            r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+\s+'  # timestamp
+            r'[\d.]+%\s+'  # percentage
+            r'\[(\w+)\]\s+'  # level
+            r'(\S+)\s+'  # module
+            r'(.*)$',  # message
+            line
+        )
+        if m:
+            level = m.group(1)
+            message = m.group(3).strip()
+            # Also strip CALLID prefix from message
+            message = re.sub(r'^(?:\[?CALLID:?\s*[0-9a-f]+\]?\s*)', '', message)
+            message = re.sub(r'^\[?CallId:?\s*[0-9a-f]+\]?\s*', '', message)
+            return f"{level} - {message}" if message else level
+        return line
+
     def _parse_lines(self, call_id: str, lines: list[str]) -> CallData:
         """Pass 2: Regex extraction on pre-filtered log lines.
 
@@ -364,6 +706,10 @@ class CallLogParser:
         Returns:
             A fully populated CallData object.
         """
+        # Detect log format: VPL (FreeSWITCH) vs ORK (syslog)
+        if self._detect_vpl_format(lines):
+            return self._parse_vpl_lines(call_id, lines)
+
         # Mailing / customer data
         customer_name: str | None = None
         cpf: str | None = None
@@ -380,6 +726,9 @@ class CallLogParser:
 
         # Call config
         tts_supplier: str | None = None
+        tts_voice: str | None = None
+        tts_voice_id: str | None = None
+        tts_model_id: str | None = None
         vpl_ip: str | None = None
         ork_ip: str | None = None
         kamailio_ip: str | None = None
@@ -408,14 +757,40 @@ class CallLogParser:
         audio_repetitions: list[AudioRepetition] = []
         missing_audio_files: list[str] = []
         hangup_reason: str | None = None
+        disposition_description: str | None = None
         error_entries: list[str] = []
 
         # Timing
         start_time: datetime | None = None
         end_time: datetime | None = None
 
+        # System prompts (MAS)
+        classifier_prompt: str | None = None
+        finalizer_prompt: str | None = None
+
+        # Sequence of LLM-decided stages (short names), chronological order.
+        stage_sequence: list[str] = []
+
+        # Current LLM-decided stage, updated as "Parsed stage" lines are seen.
+        # Because lines are processed in chronological order, this reflects the
+        # last stage decided BEFORE any given assistant response.
+        estagio_atual: str | None = None
+
         for line in lines:
             ts = self._parse_timestamp(line)
+
+            # MAS system prompts (phi_state_choser). Keep only the first
+            # occurrence of each type. Detected before the generic event chain
+            # so it never affects other extraction; the line still flows into
+            # the timeline via the generic handling below.
+            mas_m = self._RE_MAS_PROMPT.search(line)
+            if mas_m:
+                kind = mas_m.group(1).lower()
+                content = mas_m.group(2)
+                if kind == "classifier" and classifier_prompt is None:
+                    classifier_prompt = self._decodificar_prompt(content)
+                elif kind == "finalizer" and finalizer_prompt is None:
+                    finalizer_prompt = self._decodificar_prompt(content)
 
             # Track start/end time
             if ts is not None:
@@ -493,6 +868,7 @@ class CallLogParser:
                     if ts:
                         conversation.append(ConversationMessage(
                             timestamp=ts, speaker=Speaker.ASSISTANT, text=text,
+                            stage=estagio_atual,
                         ))
                         event_type = EventType.BOT_RESPONSE
                         event_content = text
@@ -506,6 +882,28 @@ class CallLogParser:
                     event_type = EventType.STAGE_TRANSITION
                     event_content = f"{from_stage} -> {to_stage}"
                     event_metadata = {"from": from_stage, "to": to_stage}
+
+            # 4b. LLM stage determination (phi_state_choser "Parsed stage: '<X>'").
+            # The model decides the conversation stage; there is no explicit
+            # "from" stage, so from is empty and source marks it as llm_stage.
+            elif self._RE_PARSED_STAGE.search(line):
+                m = self._RE_PARSED_STAGE.search(line)
+                if m:
+                    full_name = m.group(1)
+                    to_stage = self._extract_stage_name(full_name)
+                    event_type = EventType.STAGE_TRANSITION
+                    event_content = f"-> {to_stage}"
+                    event_metadata = {
+                        "to": to_stage,
+                        "from": "",
+                        "source": "llm_stage",
+                        "full": full_name,
+                    }
+                    # Consolidated chronological stage sequence for the card.
+                    stage_sequence.append(to_stage)
+                    # Track the current stage so subsequent assistant responses
+                    # can be tagged with the stage in effect at their time.
+                    estagio_atual = to_stage
 
             # 5. Categorizer decision
             elif self._RE_CATEGORIZER_DECISION.search(line):
@@ -573,6 +971,51 @@ class CallLogParser:
                             event_content = f"🔧 Tool call: {raw_data[:100]}"
                             event_metadata = {"raw": raw_data[:500]}
 
+            # 7.6 Staging decision (categorizer failed, using staging model)
+            elif 'Categorização falhou por threshold baixo' in line or 'Using LLM path instead of categorization' in line:
+                event_type = EventType.STAGING_DECISION
+                event_content = "⚡ Categorizer falhou → usando staging model"
+                # Extract confidence if available
+                conf_match = re.search(r'confidence: ([\d.]+)', line)
+                if conf_match:
+                    event_content += f" (conf={conf_match.group(1)})"
+
+            # 7.7 Finalize decision
+            elif 'Finalize response' in line or 'Parsed finalizar_atendimento' in line:
+                event_type = EventType.FINALIZE_DECISION
+                if '1' in line or 'True' in line:
+                    event_content = "🔴 Decisão: ENCERRAR chamada"
+                else:
+                    event_content = "🟢 Decisão: MANTER chamada"
+
+            # 7.8 Barge-in
+            elif 'bargein_activated' in line or 'barge-in' in line.lower():
+                event_type = EventType.BARGE_IN
+                event_content = "⚡ Barge-in: cliente interrompeu"
+
+            # 7.9 Filler events
+            elif 'Filler task iniciada' in line or 'filler_shown' in line:
+                event_type = EventType.FILLER
+                event_content = "💬 Filler: frase de espera ativada"
+            elif 'Cancelling filler' in line or 'cancelando filler' in line.lower():
+                event_type = EventType.FILLER
+                event_content = "💬 Filler cancelado (resposta pronta)"
+
+            # 7.10 Voice detection
+            elif '🎤 VOZ DETECTADA' in line or 'voz detectada' in line.lower() or 'Cancelando timer de detecção de voz (voz detectada)' in line:
+                event_type = EventType.VOICE_DETECTION
+                event_content = "🎤 Voz detectada"
+            elif '🔇' in line or 'Silêncio confirmado' in line:
+                event_type = EventType.VOICE_DETECTION
+                event_content = "🔇 Silêncio detectado"
+
+            # 7.11 Turn timing
+            elif 'TURN_TIMING' in line or 'Tempo total de processamento para chunk' in line:
+                m = re.search(r'(\d+\.?\d*)ms', line)
+                if m:
+                    event_content = f"⏱️ Turno: {m.group(1)}ms"
+                    event_metadata = {"total_ms": float(m.group(1))}
+
             # 8. TTS cache (in TTS generation completed lines)
             elif 'TTS generation completed' in line:
                 m = self._RE_TTS_CACHE.search(line)
@@ -616,6 +1059,12 @@ class CallLogParser:
                 if m:
                     session_summary = self._parse_session_summary(m.group(1))
 
+            # ORK disposition description (from ADAClassifier log)
+            elif 'navigationDescription' in line and 'dispositionId' in line:
+                disp_m = re.search(r'"navigationDescription":\s*"([^"]+)"', line)
+                if disp_m:
+                    disposition_description = disp_m.group(1)
+
             # 14. AI models
             elif self._RE_AI_MODELS.search(line):
                 m = self._RE_AI_MODELS.search(line)
@@ -632,6 +1081,25 @@ class CallLogParser:
                 m = self._RE_TTS_SUPPLIER.search(line)
                 if m:
                     tts_supplier = m.group(1)
+
+            # 15b. TTS voice name
+            elif 'tts_voice' in line or 'WayVoice' in line:
+                vm = re.search(r'"WayVoice":\s*"([^"]+)"', line)
+                if vm:
+                    tts_voice = vm.group(1)
+                elif 'tts_voice' in line:
+                    vm = re.search(r"tts_voice[=:]\s*['\"]?(\w+)", line)
+                    if vm:
+                        tts_voice = vm.group(1)
+
+            # 15c. TTS voice_id and model_id from tts_payload
+            elif 'tts_payload' in line and 'voice_id' in line:
+                vid_m = re.search(r'"voice_id":\s*\["([^"]+)"\]', line)
+                if vid_m:
+                    tts_voice_id = vid_m.group(1)
+                mid_m = re.search(r'"model_id":\s*"([^"]+)"', line)
+                if mid_m:
+                    tts_model_id = mid_m.group(1)
 
             # ADD EVERY LINE to the timeline events
             if ts:
@@ -659,6 +1127,9 @@ class CallLogParser:
             installments_overdue=installments_overdue,
             assistant_name=assistant_name,
             tts_supplier=tts_supplier,
+            tts_voice=tts_voice,
+            tts_voice_id=tts_voice_id,
+            tts_model_id=tts_model_id,
             vpl_ip=vpl_ip,
             ork_ip=ork_orchestrator_ip,
             kamailio_ip=kamailio_ip,
@@ -674,8 +1145,12 @@ class CallLogParser:
             audio_repetitions=audio_repetitions,
             missing_audio_files=missing_audio_files,
             hangup_reason=hangup_reason,
+            disposition_description=disposition_description,
             error_entries=error_entries,
             start_time=start_time,
             end_time=end_time,
             raw_mailing_data=raw_mailing_data,
+            classifier_prompt=classifier_prompt,
+            finalizer_prompt=finalizer_prompt,
+            stage_sequence=stage_sequence,
         )

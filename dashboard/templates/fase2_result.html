@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Resultado Fase 2 - Call Analysis Dashboard{% endblock %}
+{% block content %}
+{% if sanitizacao_suprimida %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-10 col-lg-8">
+        <div class="alert alert-warning shadow-sm" role="alert">
+            <h5 class="alert-heading">&#x26A0;&#xFE0F; Visão segura suprimida</h5>
+            <p class="mb-2">{{ mensagem }}</p>
+            <a href="/fase2" class="btn btn-outline-secondary btn-sm">Voltar</a>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="row justify-content-center mt-3">
+    <div class="col-12 col-xl-10">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h4 class="mb-0">Resultado da análise (Fase 2)</h4>
+            <a href="/fase2" class="btn btn-outline-secondary btn-sm">Nova análise</a>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-primary text-white">Identificador</div>
+            <div class="card-body">
+                <p class="mb-0"><code>{{ resultado.identificador }}</code></p>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white">Classificação</div>
+            <div class="card-body">
+                <p><strong>Categoria do cenário:</strong> {{ resultado.categoria_de_cenario.name }}</p>
+                <p><strong>Versão do catálogo:</strong> {{ resultado.versao_catalogo }}</p>
+                <p class="mb-0"><strong>Regra aplicada:</strong>
+                    {% if resultado.regra_aplicada %}
+                        {{ resultado.regra_aplicada.rule_id }} v{{ resultado.regra_aplicada.versao }}
+                    {% else %}
+                        nenhuma
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white">Cobertura e aplicações</div>
+            <div class="card-body">
+                <p><strong>Cobertura rotulada:</strong> {{ resultado.cobertura_rotulada }}</p>
+                <p><strong>Aplicações analisadas:</strong>
+                    {{ resultado.aplicacoes_analisadas | join(', ') if resultado.aplicacoes_analisadas else 'nenhuma' }}
+                </p>
+                <p class="mb-0"><strong>Aplicações ausentes ou inválidas:</strong>
+                    {{ resultado.aplicacoes_ausentes_ou_invalidas | join(', ') if resultado.aplicacoes_ausentes_ou_invalidas else 'nenhuma' }}
+                </p>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white">Correlação</div>
+            <div class="card-body">
+                {% if resultado.correlacao %}
+                <p><strong>Status:</strong> {{ 'encontrada' if resultado.correlacao.encontrada else 'não encontrada' }}</p>
+                <p><strong>Base primária:</strong> {{ resultado.correlacao.base_primaria.name }}</p>
+                {% if resultado.correlacao.motivo_seguro %}
+                <p class="mb-0"><strong>Motivo:</strong> {{ resultado.correlacao.motivo_seguro }}</p>
+                {% endif %}
+                {% else %}
+                <p class="mb-0">Correlação: não encontrada</p>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if resultado.contagem_por_aplicacao %}
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white">Contagem por aplicação</div>
+            <div class="card-body">
+                <ul class="mb-0">
+                    {% for app, contagem in resultado.contagem_por_aplicacao.items() %}
+                    <li>{{ app }}: {{ contagem }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-secondary text-white">Visão segura renderizada</div>
+            <div class="card-body">
+                <pre class="mb-0" style="white-space: pre-wrap;">{{ texto }}</pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
