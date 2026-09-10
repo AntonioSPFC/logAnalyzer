@@ -135,10 +135,46 @@
                         {% if call.disposition_description %}
                         <p class="mb-1"><strong>Descrição:</strong> {{ call.disposition_description }}</p>
                         {% endif %}
+                        <p class="mb-1"><strong>Chamada finalizada:</strong>
+                            {% if call.call_finalizada %}<span class="badge bg-success">sim</span>{% else %}<span class="badge bg-secondary">não</span>{% endif %}
+                        </p>
+                        <p class="mb-1"><strong>IA encerrou:</strong>
+                            {% if call.ia_hangup %}<span class="badge bg-danger">sim</span>{% else %}<span class="badge bg-secondary">não</span>{% endif %}
+                        </p>
                     </div>
                 </div>
             </div>
         </div>
+
+        <!-- ADA Turns Card (VPL enriched extraction) -->
+        {% if call.turnos_ada %}
+        <div class="card mb-3">
+            <div class="card-header bg-dark text-white">&#x1F3AF; Turnos (ADA)</div>
+            <div class="card-body py-2" style="max-height: 400px; overflow-y: auto; font-size: 0.85rem;">
+                {% for turno in call.turnos_ada %}
+                <div class="p-2 mb-2 rounded border {% if turno.hangup %}border-danger{% endif %}" style="background-color: #f8f9fa;">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <small class="text-muted">{% if turno.timestamp %}{{ turno.timestamp.strftime('%H:%M:%S') }}{% else %}—{% endif %}</small>
+                        <span>
+                            {% if turno.stage %}<span class="badge bg-info">{{ turno.stage }}</span>{% endif %}
+                            {% if turno.ai_system == 'NoInputHandler' %}<span class="badge bg-warning text-dark">🔇 NoInput</span>{% endif %}
+                            {% if turno.hangup %}<span class="badge bg-danger">🔴 hangup</span>{% endif %}
+                        </span>
+                    </div>
+                    <p class="mb-1"><small class="text-muted">{{ turno.ai_system or '—' }}{% if turno.ai_model %} / {{ turno.ai_model }}{% endif %}</small></p>
+                    {% if turno.asr %}
+                    <p class="mb-1">&#x1F9D1; <strong>Cliente:</strong> {{ turno.asr }}
+                        {% if turno.asr_confidence is not none %}<span class="badge bg-secondary">conf={{ turno.asr_confidence }}</span>{% endif %}
+                    </p>
+                    {% endif %}
+                    {% if turno.assistant_text %}
+                    <p class="mb-0">&#x1F916; <strong>Assistente:</strong> {{ turno.assistant_text }}</p>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
 
         <!-- Conversation Card -->
         <div class="card mb-3">

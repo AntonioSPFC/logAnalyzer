@@ -536,3 +536,158 @@ class TestAssistantMessageStage:
         assert len(assistant_msgs) == 2
         assert assistant_msgs[0].stage == "identificacao_do_cliente"
         assert assistant_msgs[1].stage == "negociacao_da_divida"
+
+
+class TestVplTurnosAda:
+    """Tests for enriched ADA turn extraction from VPL ``[AFTER]`` blocks.
+
+    All input lines are 100% synthetic and follow the real VPL prefix:
+    ``<ts> <pct>% [LEVEL] jsmain.cpp:NN [tag] CALLID: <hex> ...``
+    """
+
+    CALL_ID = "abc123def456"
+
+    @staticmethod
+    def _vpl_after(json_str, ts="2026-09-08 10:56:52.212650", tag="askADA"):
+        """Build a synthetic VPL [AFTER] line carrying the ADA turn JSON."""
+        return (
+            f"{ts} 98.43% [ALERT] jsmain.cpp:1332 [{tag}] "
+            f"CALLID: {TestVplTurnosAda.CALL_ID} targetContact.ada [AFTER]: {json_str}"
+        )
+
+    @staticmethod
+    def _vpl_finalizada(ts="2026-09-08 10:57:10.000000"):
+        return (
+            f"{ts} 99.00% [ALERT] jsmain.cpp:267 [flow] "
+            f"CALLID: {TestVplTurnosAda.CALL_ID} [ChamadaFinalizada]"
+        )
+
+    def _parse(self, lines):
+        parser = CallLogParser.__new__(CallLogParser)
+        return parser._parse_vpl_lines(self.CALL_ID, lines)
+
+    def test_extracts_turno_fields(self):
+        """A conversation [AFTER] turn is captured with all fields."""
+        import json
+        body = json.dumps({
+            "asr_transcription": "Oi, sou eu sim",
+            "asr_confidence": 1.0,
+            "ai_system": "Categorizer",
+            "ai_model": "AISM",
+            "ai_text_to_vocalize": "Ótimo, vamos confirmar seu CPF.",
+            "ai_milestone": "FastFlowCloud-ADA-Cob-Generic-Company-CPF-identify_contact",
+            "ai_hangup_call": False,
+        })
+        call = self._parse([self._vpl_after(body)])
+
+        assert len(call.turnos_ada) == 1
+        t = call.turnos_ada[0]
+        assert t.asr == "Oi, sou eu sim"
+        assert t.asr_confidence == 1.0
+        assert t.ai_system == "Categorizer"
+        assert t.ai_model == "AISM"
+        assert t.assistant_text == "Ótimo, vamos confirmar seu CPF."
+        assert t.stage == "identify_contact"
+        assert t.hangup is False
+
+    def test_no_input_increments_timeout_and_no_stage(self):
+        """NoInputHandler turn counts as voice timeout and is not a conv stage."""
+        import json
+        body = json.dumps({
+            "asr_transcription": "",
+            "asr_confidence": None,
+            "ai_system": "NoInputHandler",
+            "ai_model": "No Input Timeout",
+            "ai_text_to_vocalize": "Você ainda está aí?",
+            "ai_milestone": "no_input_timeout_1",
+            "ai_hangup_call": False,
+        })
+        call = self._parse([self._vpl_after(body)])
+
+        assert call.no_voice_timeouts == 1
+        assert call.stage_sequence == []
+        assert len(call.turnos_ada) == 1
+        assert call.turnos_ada[0].stage == ""
+
+    def test_ai_hangup_marks_ia_hangup(self):
+        """A turn with ai_hangup_call true sets ia_hangup on the CallData."""
+        import json
+        body = json.dumps({
+            "asr_transcription": "Não tenho interesse",
+            "asr_confidence": 0.9,
+            "ai_system": "Categorizer",
+            "ai_model": "AISM",
+            "ai_text_to_vocalize": "Tudo bem, até logo.",
+            "ai_milestone": "FastFlowCloud-ADA-Cob-Generic-Company-End-finalize_call",
+            "ai_hangup_call": True,
+        })
+        call = self._parse([self._vpl_after(body)])
+
+        assert call.ia_hangup is True
+        assert call.turnos_ada[0].hangup is True
+
+    def test_chamada_finalizada_marks_flag(self):
+        """A [ChamadaFinalizada] marker sets call_finalizada."""
+        call = self._parse([self._vpl_finalizada()])
+        assert call.call_finalizada is True
+
+    def test_stage_sequence_order(self):
+        """stage_sequence receives conversation milestones in order."""
+        import json
+        b1 = json.dumps({
+            "asr_transcription": "alo",
+            "asr_confidence": 1.0,
+            "ai_system": "Categorizer",
+            "ai_model": "AISM",
+            "ai_text_to_vocalize": "oi",
+            "ai_milestone": "FastFlowCloud-ADA-Cob-Generic-Company-CPF-identify_contact",
+            "ai_hangup_call": False,
+        })
+        b2 = json.dumps({
+            "asr_transcription": "sim",
+            "asr_confidence": 1.0,
+            "ai_system": "Categorizer",
+            "ai_model": "AISM",
+            "ai_text_to_vocalize": "confirmado",
+            "ai_milestone": "FastFlowCloud-ADA-Cob-Generic-Company-Deal-offer_deal",
+            "ai_hangup_call": False,
+        })
+        call = self._parse([
+            self._vpl_after(b1, ts="2026-09-08 10:56:52.212650"),
+            self._vpl_after(b2, ts="2026-09-08 10:56:58.000000"),
+        ])
+        assert call.stage_sequence == ["identify_contact", "offer_deal"]
+
+    def test_malformed_json_after_is_ignored(self):
+        """A malformed [AFTER] JSON is skipped without breaking the parse."""
+        bad = self._vpl_after("{not valid json")
+        good_body = (
+            '{"asr_transcription": "ok", "asr_confidence": 1.0, '
+            '"ai_system": "Categorizer", "ai_model": "AISM", '
+            '"ai_text_to_vocalize": "certo", '
+            '"ai_milestone": "FastFlowCloud-ADA-Cob-Generic-Company-CPF-identify_contact", '
+            '"ai_hangup_call": false}'
+        )
+        call = self._parse([bad, self._vpl_after(good_body, ts="2026-09-08 10:57:00.000000")])
+
+        assert len(call.turnos_ada) == 1
+        assert call.turnos_ada[0].asr == "ok"
+
+    def test_conversation_populated_from_after_when_no_ada_conversation(self):
+        """When no adaConversation exists, [AFTER] fills the flat conversation."""
+        import json
+        body = json.dumps({
+            "asr_transcription": "boa tarde",
+            "asr_confidence": 1.0,
+            "ai_system": "Categorizer",
+            "ai_model": "AISM",
+            "ai_text_to_vocalize": "boa tarde, tudo bem?",
+            "ai_milestone": "FastFlowCloud-ADA-Cob-Generic-Company-CPF-identify_contact",
+            "ai_hangup_call": False,
+        })
+        call = self._parse([self._vpl_after(body)])
+
+        assert len(call.conversation) == 2
+        assert call.conversation[0].speaker.value == "customer"
+        assert call.conversation[1].speaker.value == "assistant"
+        assert call.conversation[1].stage == "identify_contact"

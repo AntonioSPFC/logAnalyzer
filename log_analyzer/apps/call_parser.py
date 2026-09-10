@@ -19,6 +19,7 @@ __all__ = [
     "AIModelInfo",
     "SessionSummary",
     "AudioRepetition",
+    "TurnoAda",
     "CallData",
     "CallLogParser",
 ]
@@ -109,6 +110,25 @@ class AudioRepetition:
 
 
 @dataclass(frozen=True)
+class TurnoAda:
+    """A single ADA conversation turn extracted from a VPL ``[AFTER]`` block.
+
+    Each turn corresponds to one ``targetContact.ada [AFTER]: {JSON}`` log line
+    and captures the customer's transcription, the assistant's response and the
+    decision metadata (system/model/stage/hangup) reported by the ADA engine.
+    """
+
+    timestamp: datetime | None
+    asr: str
+    asr_confidence: float | None
+    ai_system: str
+    ai_model: str
+    assistant_text: str
+    stage: str
+    hangup: bool
+
+
+@dataclass(frozen=True)
 class CallData:
     """Immutable result of parsing a call's log entries.
 
@@ -166,6 +186,14 @@ class CallData:
     # Sequence of LLM-decided stages (short names), in chronological order.
     # Includes consecutive repetitions to stay faithful to the log.
     stage_sequence: list[str] = field(default_factory=list)
+    # Structured per-turn ADA data extracted from VPL ``[AFTER]`` blocks.
+    # Empty for ORK flows. Added last with a default so existing construction
+    # keeps working.
+    turnos_ada: list["TurnoAda"] = field(default_factory=list)
+    # True if a ``[ChamadaFinalizada]`` marker was seen (effective call end).
+    call_finalizada: bool = False
+    # True if any ADA turn reported ``ai_hangup_call: true`` (AI ended the call).
+    ia_hangup: bool = False
 
 
 import ast
@@ -287,6 +315,10 @@ class CallLogParser:
     _RE_TOOL_CALL_PROCESSING = re.compile(r"Processing tool call: (\w+)")
     _RE_TOOL_CALL_SECOND = re.compile(r"SENDING MESSAGE FOR SECOND CALL \(TOOL CALL\): (.+)")
     _RE_STAGE_NAME = re.compile(r'-([a-z][a-z_]+)$')
+
+    # VPL ADA turn (askADA) canonical JSON block and effective call end marker.
+    _RE_ADA_AFTER = re.compile(r"targetContact\.ada \[AFTER\]:\s*(\{.*\})\s*$")
+    _RE_CHAMADA_FINALIZADA = re.compile(r"\[ChamadaFinalizada\]")
 
     # MAS system prompt pattern (phi_state_choser): captures Classifier/Finalizer
     # prompt content from the label up to end of line.
@@ -455,6 +487,15 @@ class CallLogParser:
         error_entries = []
         start_time = None
         end_time = None
+        # Group A/B/C accumulators (enriched ADA extraction from [AFTER] blocks).
+        turnos_ada = []
+        stage_sequence = []
+        call_finalizada = False
+        ia_hangup = False
+        # Last conversation-stage milestone seen, so assistant messages produced
+        # outside adaConversation (i.e. directly from [AFTER]) can carry a stage
+        # (analogous to the ORK flow's estagio_atual tracking).
+        estagio_atual = None
 
         # VPL timestamp pattern: "2026-08-03 10:00:36.756713"
         re_vpl_ts = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)')
@@ -533,6 +574,120 @@ class CallLogParser:
                                 ))
                     except (json_mod.JSONDecodeError, ValueError):
                         pass
+
+            # --- Group A/B/C: per-turn ADA data from the canonical [AFTER] block ---
+            # The [AFTER] line carries the authoritative per-turn JSON. We use it
+            # as the single source for structured turns (turnos_ada), stage
+            # sequence, voice-timeout counting and AI-hangup detection. We do NOT
+            # parse [BEFORE]/detected-speech for turns to avoid duplicating them.
+            # adaConversation (handled above) remains the source for the flat
+            # conversation list; here we only enrich assistant messages with a
+            # stage when they don't come from adaConversation.
+            ada_m = self._RE_ADA_AFTER.search(line)
+            if ada_m:
+                try:
+                    body = json_mod.loads(ada_m.group(1))
+                except (json_mod.JSONDecodeError, ValueError):
+                    body = None
+                if body is not None:
+                    asr_text = body.get('asr_transcription', '') or ''
+                    asr_conf = body.get('asr_confidence')
+                    try:
+                        asr_conf = float(asr_conf) if asr_conf is not None else None
+                    except (TypeError, ValueError):
+                        asr_conf = None
+                    ai_sys = body.get('ai_system', '') or ''
+                    ai_mod = body.get('ai_model', '') or ''
+                    assistant_text = body.get('ai_text_to_vocalize', '') or ''
+                    milestone = body.get('ai_milestone', '') or ''
+                    hangup = bool(body.get('ai_hangup_call', False))
+
+                    # Classify the milestone: NoInput/timeout turns are not
+                    # conversation stages. A conversation stage is anything that
+                    # yields a short suffix name via _extract_stage_name (i.e. a
+                    # trailing "-lower_case" segment) and is not a no_input_timeout.
+                    is_no_input = (
+                        ai_sys == 'NoInputHandler'
+                        or milestone.startswith('no_input_timeout')
+                    )
+                    short_stage = self._extract_stage_name(milestone) if milestone else ''
+                    is_conversation_stage = (
+                        bool(milestone)
+                        and not is_no_input
+                        and short_stage != milestone
+                    )
+
+                    if is_conversation_stage:
+                        estagio_atual = short_stage
+                        stage_sequence.append(short_stage)
+                        events.append(CallEvent(
+                            timestamp=ts,
+                            event_type=EventType.STAGE_TRANSITION,
+                            content=f"→ {short_stage}",
+                            metadata={
+                                "to": short_stage,
+                                "from": "",
+                                "source": "vpl_milestone",
+                                "full": milestone,
+                            },
+                        ))
+
+                    turnos_ada.append(TurnoAda(
+                        timestamp=ts,
+                        asr=asr_text,
+                        asr_confidence=asr_conf,
+                        ai_system=ai_sys,
+                        ai_model=ai_mod,
+                        assistant_text=assistant_text,
+                        stage=short_stage if is_conversation_stage else '',
+                        hangup=hangup,
+                    ))
+
+                    # Materialize conversation messages only if adaConversation
+                    # has not already populated the flat conversation list, to
+                    # avoid duplicating turns.
+                    if not conversation:
+                        if asr_text and ts:
+                            conversation.append(ConversationMessage(
+                                timestamp=ts, speaker=Speaker.CUSTOMER, text=asr_text
+                            ))
+                        if assistant_text and ts:
+                            conversation.append(ConversationMessage(
+                                timestamp=ts,
+                                speaker=Speaker.ASSISTANT,
+                                text=assistant_text,
+                                stage=estagio_atual if is_conversation_stage else None,
+                            ))
+
+                    if is_no_input:
+                        no_voice_timeouts += 1
+                        if ts:
+                            events.append(CallEvent(
+                                timestamp=ts,
+                                event_type=EventType.VOICE_DETECTION,
+                                content="🔇 NoInput / timeout",
+                            ))
+
+                    if hangup:
+                        ia_hangup = True
+                        if ts:
+                            events.append(CallEvent(
+                                timestamp=ts,
+                                event_type=EventType.FINALIZE_DECISION,
+                                content="🔴 IA decidiu encerrar (ai_hangup_call)",
+                            ))
+                # Skip further generic processing of this [AFTER] line.
+                continue
+
+            # Group B: effective call-end marker.
+            if self._RE_CHAMADA_FINALIZADA.search(line):
+                call_finalizada = True
+                if ts:
+                    events.append(CallEvent(
+                        timestamp=ts,
+                        event_type=EventType.FINALIZE_DECISION,
+                        content="🏁 Chamada finalizada",
+                    ))
 
             # Extract ASR + Bot response from detected-speech JSON bodies
             if 'detected-speech' in line or '"asr_transcription"' in line:
@@ -623,7 +778,7 @@ class CallLogParser:
                 content = self._clean_vpl_line(line)
 
                 # Skip if already added as a specific event type above
-                if '[ERR]' not in line and 'parsedBody:' not in line and not (' ERROR: ' in line and 'CALLID:' in line and '"error"' not in line):
+                if '[ERR]' not in line and 'parsedBody:' not in line and '[ChamadaFinalizada]' not in line and not (' ERROR: ' in line and 'CALLID:' in line and '"error"' not in line):
                     events.append(CallEvent(
                         timestamp=ts, event_type=event_type_final, content=content
                     ))
@@ -667,7 +822,10 @@ class CallLogParser:
             raw_mailing_data=raw_mailing_data,
             classifier_prompt=None,
             finalizer_prompt=None,
-            stage_sequence=[],
+            stage_sequence=stage_sequence,
+            turnos_ada=turnos_ada,
+            call_finalizada=call_finalizada,
+            ia_hangup=ia_hangup,
         )
 
     @staticmethod
@@ -1153,4 +1311,7 @@ class CallLogParser:
             classifier_prompt=classifier_prompt,
             finalizer_prompt=finalizer_prompt,
             stage_sequence=stage_sequence,
+            turnos_ada=[],
+            call_finalizada=False,
+            ia_hangup=False,
         )
