@@ -194,6 +194,16 @@ class CallData:
     call_finalizada: bool = False
     # True if any ADA turn reported ``ai_hangup_call: true`` (AI ended the call).
     ia_hangup: bool = False
+    # -- Enriched mailing fields (VPL WaySchInfo). Added last with defaults so
+    # existing keyword construction (ORK and VPL) keeps working. --
+    debt_minimum: str | None = None
+    payment_profile: str | None = None
+    overdue_dates: list[str] = field(default_factory=list)
+    accounts: list[dict] = field(default_factory=list)
+    campaign_id: str | None = None
+    mailing_table: str | None = None
+    mailing_record_id: str | None = None
+    vagent_id: str | None = None
 
 
 import ast
@@ -464,6 +474,15 @@ class CallLogParser:
         days_overdue = None
         installments_overdue = None
         raw_mailing_data = None
+        # Enriched mailing locals (VPL WaySchInfo)
+        debt_minimum = None
+        payment_profile = None
+        overdue_dates = []
+        accounts = []
+        campaign_id = None
+        mailing_table = None
+        mailing_record_id = None
+        vagent_id = None
         tts_supplier = None
         tts_voice = None
         tts_voice_id = None
@@ -541,18 +560,67 @@ class CallLogParser:
                     try:
                         data = json_mod.loads(m.group(1))
                         raw_mailing_data = data
-                        customer_name = data.get('Nome') or data.get('name')
-                        cpf = data.get('CPF') or data.get('CustomerId')
+                        # Real WaySchInfo field names first, ORK-style fallbacks kept.
+                        customer_name = (
+                            data.get('NOME_CLIENTE')
+                            or data.get('Nome')
+                            or data.get('name')
+                            or data.get('CustomerNameRecord')
+                        )
+                        # CustomerId is an internal id, NOT a CPF. Leave cpf as
+                        # None for VPL unless a real CPF field exists.
+                        cpf = data.get('CPF')
                         phone = data.get('OriginalPhoneNumber')
-                        product = data.get('Produto') or data.get('produto')
+                        product = (
+                            data.get('PRODUTO')
+                            or data.get('Produto')
+                            or data.get('produto')
+                        )
                         company = data.get('empresa')
-                        assistant_name = data.get('assistente')
-                        debt_total = data.get('Valor_Atualizado') or data.get('Valor')
+                        assistant_name = data.get('VAgentName') or data.get('assistente')
+                        installments_overdue = (
+                            data.get('parcelasEmAtraso')
+                            or data.get('installments_overdue')
+                        )
+                        debt_total = (
+                            data.get('valorDivida')
+                            or data.get('Valor_Atualizado')
+                            or data.get('Valor')
+                        )
                         debt_discount = data.get('Valor_Desconto')
-                        debt_due_date = data.get('Vencimento')
+                        debt_due_date = (
+                            data.get('dtPrimeiraParcelaAtrasada')
+                            or data.get('Vencimento')
+                        )
                         days_overdue = data.get('Dias_Atraso')
                         tts_supplier = data.get('WayEngine') or tts_supplier
                         tts_voice = data.get('WayVoice') or tts_voice
+
+                        # -- Enriched WaySchInfo fields --
+                        debt_minimum = data.get('valorMinimo')
+                        payment_profile = data.get('perfilPagamento')
+                        overdue_dates = [
+                            d for d in (
+                                data.get('dtPrimeiraParcelaAtrasada'),
+                                data.get('dtSegundaParcelaAtrasada'),
+                                data.get('dtTerceiraParcelaAtrasada'),
+                            ) if d
+                        ]
+                        accounts = []
+                        for idx in ('1', '2', '3'):
+                            valor = data.get(f'valorConta{idx}')
+                            barras = data.get(f'codigoBarrasConta{idx}')
+                            pix = data.get(f'CodigoPixConta{idx}')
+                            if valor or barras or pix:
+                                accounts.append({
+                                    'valor': valor,
+                                    'codigo_barras': barras,
+                                    'codigo_pix': pix,
+                                })
+                        campaign_id = data.get('CampaignId')
+                        mailing_table = data.get('TableName')
+                        mailing_record_id = data.get('MailingRecordId')
+                        vagent_id = data.get('VAgentId')
                     except (json_mod.JSONDecodeError, ValueError):
                         pass
 
@@ -826,6 +894,14 @@ class CallLogParser:
             turnos_ada=turnos_ada,
             call_finalizada=call_finalizada,
             ia_hangup=ia_hangup,
+            debt_minimum=debt_minimum,
+            payment_profile=payment_profile,
+            overdue_dates=overdue_dates,
+            accounts=accounts,
+            campaign_id=campaign_id,
+            mailing_table=mailing_table,
+            mailing_record_id=mailing_record_id,
+            vagent_id=vagent_id,
         )
 
     @staticmethod

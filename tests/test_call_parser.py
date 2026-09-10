@@ -691,3 +691,107 @@ class TestVplTurnosAda:
         assert call.conversation[0].speaker.value == "customer"
         assert call.conversation[1].speaker.value == "assistant"
         assert call.conversation[1].stage == "identify_contact"
+
+
+class TestVplWaySchInfo:
+    """Tests for enriched mailing extraction from VPL ``WaySchInfo`` lines.
+
+    All input is 100% synthetic (fake names, phones, PIX/barcode strings).
+    """
+
+    CALL_ID = "cafe1234beef5678"
+
+    @staticmethod
+    def _vpl_waysch(json_str, ts="2026-09-08 11:23:34.112641"):
+        """Build a synthetic VPL WS_WAY_START line carrying WaySchInfo JSON."""
+        return (
+            f"{ts} 99.03% [INFO] jsmain.cpp:541 [WAY][WS_WAY_START] "
+            f"CallInfo CALLID: {TestVplWaySchInfo.CALL_ID} WaySchInfo: {json_str}"
+        )
+
+    def _parse(self, lines):
+        parser = CallLogParser.__new__(CallLogParser)
+        return parser._parse_vpl_lines(self.CALL_ID, lines)
+
+    @staticmethod
+    def _fake_waysch():
+        import json
+        return json.dumps({
+            "OriginalPhoneNumber": "11999990000",
+            "Prefix": "11",
+            "CustomerNameRecord": None,
+            "NOME_CLIENTE": "FULANO DE TAL",
+            "PRODUTO": "EAC",
+            "parcelasEmAtraso": "2",
+            "dtPrimeiraParcelaAtrasada": "06/08/2026",
+            "dtSegundaParcelaAtrasada": "08/07/2026",
+            "dtTerceiraParcelaAtrasada": None,
+            "valorDivida": "12345,67",
+            "valorMinimo": "1000,15",
+            "valorParcelaMaisAntiga": "9000,52",
+            "codigoBarrasConta1": "00000BARCODE1",
+            "codigoBarrasConta2": "00000BARCODE2",
+            "codigoBarrasConta3": None,
+            "CodigoPixConta1": "FAKEPIX0001",
+            "CodigoPixConta2": "FAKEPIX0002",
+            "CodigoPixConta3": None,
+            "valorConta1": "1000,15",
+            "valorConta2": "9000,52",
+            "valorConta3": None,
+            "perfilPagamento": "VISTA",
+            "CampaignId": "999",
+            "CustomerId": "11111",
+            "TableName": "FAKE_TABLE_TESTE",
+            "MailingRecordId": "7",
+            "MailingPhoneNumberId": "7",
+            "VAgentId": "1234",
+            "VAgentName": "Assistente Fake",
+            "WayEngine": "rest:elevenlabs",
+            "WayVoice": "jessica",
+        })
+
+    def test_maps_core_fields(self):
+        call = self._parse([self._vpl_waysch(self._fake_waysch())])
+        assert call.customer_name == "FULANO DE TAL"
+        assert call.product == "EAC"
+        assert call.phone == "11999990000"
+        assert call.installments_overdue == "2"
+        assert call.debt_total == "12345,67"
+        assert call.debt_minimum == "1000,15"
+        assert call.payment_profile == "VISTA"
+        assert call.assistant_name == "Assistente Fake"
+
+    def test_cpf_is_none_for_vpl(self):
+        """CustomerId is an internal id, not a CPF -> cpf stays None."""
+        call = self._parse([self._vpl_waysch(self._fake_waysch())])
+        assert call.cpf is None
+
+    def test_overdue_dates_in_order_non_null(self):
+        call = self._parse([self._vpl_waysch(self._fake_waysch())])
+        assert call.overdue_dates == ["06/08/2026", "08/07/2026"]
+
+    def test_accounts_extracted(self):
+        call = self._parse([self._vpl_waysch(self._fake_waysch())])
+        assert len(call.accounts) == 2
+        assert call.accounts[0] == {
+            "valor": "1000,15",
+            "codigo_barras": "00000BARCODE1",
+            "codigo_pix": "FAKEPIX0001",
+        }
+        assert call.accounts[1] == {
+            "valor": "9000,52",
+            "codigo_barras": "00000BARCODE2",
+            "codigo_pix": "FAKEPIX0002",
+        }
+
+    def test_campaign_and_mailing_metadata(self):
+        call = self._parse([self._vpl_waysch(self._fake_waysch())])
+        assert call.campaign_id == "999"
+        assert call.mailing_table == "FAKE_TABLE_TESTE"
+        assert call.mailing_record_id == "7"
+        assert call.vagent_id == "1234"
+
+    def test_tts_supplier_and_voice(self):
+        call = self._parse([self._vpl_waysch(self._fake_waysch())])
+        assert call.tts_supplier == "rest:elevenlabs"
+        assert call.tts_voice == "jessica"

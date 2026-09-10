@@ -30,7 +30,35 @@
                 <p class="mb-1"><strong>Com Desconto:</strong> R$ {{ call.debt_discount or '—' }}</p>
                 <p class="mb-1"><strong>Vencimento:</strong> {{ call.debt_due_date or '—' }}</p>
                 <p class="mb-1"><strong>Dias Atraso:</strong> {{ call.days_overdue or '—' }}</p>
-                <p class="mb-0"><strong>Parcelas:</strong> {{ call.installments_overdue or '—' }}</p>
+                <p class="mb-1"><strong>Parcelas:</strong> {{ call.installments_overdue or '—' }}</p>
+                <p class="mb-1"><strong>Valor Mínimo:</strong> R$ {{ call.debt_minimum or '—' }}</p>
+                <p class="mb-1"><strong>Perfil Pagamento:</strong> {{ call.payment_profile or '—' }}</p>
+                <p class="mb-0"><strong>Datas em atraso:</strong> {{ call.overdue_dates|join(', ') or '—' }}</p>
+            </div>
+        </div>
+
+        {% if call.accounts %}
+        <!-- Payment / Accounts Card -->
+        <div class="card mb-3">
+            <div class="card-header bg-success text-white">&#x1F4B3; Pagamento</div>
+            <div class="card-body py-2">
+                {% for acc in call.accounts %}
+                <p class="mb-1"><strong>Conta {{ loop.index }}:</strong> R$ {{ acc.valor or '—' }}</p>
+                <p class="mb-1 ms-2"><small class="text-muted">Cód. barras:</small> <code style="font-size: 0.7rem;">{{ acc.codigo_barras or '—' }}</code></p>
+                <p class="mb-2 ms-2"><small class="text-muted">Cód. PIX:</small> <code style="font-size: 0.7rem;">{{ acc.codigo_pix or '—' }}</code></p>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Mailing / Campaign Card -->
+        <div class="card mb-3">
+            <div class="card-header bg-dark text-white">&#x1F4CB; Mailing / Campanha</div>
+            <div class="card-body py-2">
+                <p class="mb-1"><strong>Campanha:</strong> {{ call.campaign_id or '—' }}</p>
+                <p class="mb-1"><strong>Tabela:</strong> <code style="font-size: 0.7rem;">{{ call.mailing_table or '—' }}</code></p>
+                <p class="mb-1"><strong>Record ID:</strong> {{ call.mailing_record_id or '—' }}</p>
+                <p class="mb-0"><strong>VAgent ID:</strong> {{ call.vagent_id or '—' }}</p>
             </div>
         </div>
 
